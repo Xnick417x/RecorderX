@@ -154,8 +154,7 @@ public class FloatingController {
             
             GradientDrawable menuBg = new GradientDrawable();
             menuBg.setCornerRadius(dpToPx(28));
-            menuBg.setColor(Color.parseColor("#B31F1F1F")); // 70% transparent dark grey
-            menuBg.setStroke(dpToPx(1.5f), Color.parseColor("#66FFFFFF")); // 40% transparent white border
+            menuBg.setColor(Color.parseColor("#991F1F1F"));
             menuView.setBackground(menuBg);
             menuView.setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
             
@@ -168,7 +167,7 @@ public class FloatingController {
             timerParams.gravity = Gravity.CENTER_VERTICAL;
             timerParams.setMargins(dpToPx(8), 0, dpToPx(8), 0);
             tvTimer.setLayoutParams(timerParams);
-            tvTimer.setTextColor(Color.WHITE);
+            tvTimer.setTextColor(Color.parseColor("#C2FFFFFF"));
             tvTimer.setTextSize(14f);
             tvTimer.setGravity(Gravity.CENTER);
             tvTimer.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -265,10 +264,10 @@ public class FloatingController {
                 brushController.show();
             });
 
-            btnLayout = createMenuButton(new LayoutIconDrawable(settings.isBubbleMenuVertical()), v -> {
+            btnLayout = createMenuButton(new RotateIconDrawable(settings.isBubbleMenuVertical()), v -> {
                 boolean nextVertical = !settings.isBubbleMenuVertical();
                 settings.setBubbleMenuVertical(nextVertical);
-                ((ImageView) v).setImageDrawable(new LayoutIconDrawable(nextVertical));
+                ((ImageView) v).setImageDrawable(new RotateIconDrawable(nextVertical));
                 applyMenuOrientation();
                 windowManager.updateViewLayout(rootLayout, params);
             });
@@ -406,6 +405,7 @@ public class FloatingController {
         ImageView button = new ImageView(context);
         button.setLayoutParams(new LinearLayout.LayoutParams(dpToPx(BUTTON_DP), dpToPx(BUTTON_DP)));
         button.setImageDrawable(iconDrawable);
+        button.setAlpha(0.72f);
         button.setOnClickListener(listener);
         menuButtons.add(button);
         return button;
@@ -612,7 +612,12 @@ public class FloatingController {
 
     private void applyMenuOrientation() {
         if (menuView == null) return;
-        boolean vertical = settings.isBubbleMenuVertical();
+
+        // The setting means "along the phone's long edge", so it has to flip with the device;
+        // otherwise a vertical menu ends up running across the short side in a landscape app
+        boolean deviceLandscape = context.getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+        boolean vertical = settings.isBubbleMenuVertical() ^ deviceLandscape;
         menuView.setOrientation(vertical ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
 
         menuView.setGravity(Gravity.CENTER);
@@ -1062,14 +1067,15 @@ public class FloatingController {
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
-    private static class LayoutIconDrawable extends Drawable {
+    private static class RotateIconDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final boolean isVertical;
 
-        public LayoutIconDrawable(boolean isVertical) {
+        public RotateIconDrawable(boolean isVertical) {
             this.isVertical = isVertical;
             paint.setColor(Color.WHITE);
-            paint.setStyle(Paint.Style.FILL);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
         }
 
         @Override
@@ -1077,20 +1083,37 @@ public class FloatingController {
             int w = getBounds().width();
             int h = getBounds().height();
             float size = Math.min(w, h);
-            float thickness = size * 0.15f;
-            float gap = size * 0.10f;
-            float span = thickness * 3 + gap * 2;
+            float cx = w * 0.5f;
+            float cy = h * 0.5f;
 
-            for (int i = 0; i < 3; i++) {
-                float offset = i * (thickness + gap);
-                if (isVertical) {
-                    float top = (h - span) / 2f + offset;
-                    canvas.drawRoundRect(w * 0.25f, top, w * 0.75f, top + thickness, 4f, 4f, paint);
-                } else {
-                    float left = (w - span) / 2f + offset;
-                    canvas.drawRoundRect(left, h * 0.25f, left + thickness, h * 0.75f, 4f, 4f, paint);
-                }
-            }
+            // the slab in the middle still shows which way the menu will sit
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(size * 0.085f);
+            float shortHalf = size * 0.12f;
+            float longHalf = size * 0.19f;
+            android.graphics.RectF body = isVertical
+                ? new android.graphics.RectF(cx - shortHalf, cy - longHalf, cx + shortHalf, cy + longHalf)
+                : new android.graphics.RectF(cx - longHalf, cy - shortHalf, cx + longHalf, cy + shortHalf);
+            canvas.drawRoundRect(body, size * 0.05f, size * 0.05f, paint);
+
+            float r = size * 0.37f;
+            android.graphics.RectF oval = new android.graphics.RectF(cx - r, cy - r, cx + r, cy + r);
+            paint.setStrokeWidth(size * 0.075f);
+            canvas.drawArc(oval, 150, 110, false, paint);
+            canvas.drawArc(oval, -30, 110, false, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            arrowHead(canvas, cx, cy - r, 1f, 0f, size * 0.13f);
+            arrowHead(canvas, cx, cy + r, -1f, 0f, size * 0.13f);
+        }
+
+        private void arrowHead(Canvas canvas, float x, float y, float dx, float dy, float s) {
+            Path p = new Path();
+            p.moveTo(x + dx * s, y + dy * s);
+            p.lineTo(x - dy * s * 0.75f, y + dx * s * 0.75f);
+            p.lineTo(x + dy * s * 0.75f, y - dx * s * 0.75f);
+            p.close();
+            canvas.drawPath(p, paint);
         }
 
         @Override public void setAlpha(int alpha) {}

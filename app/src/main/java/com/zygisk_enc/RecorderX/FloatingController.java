@@ -45,6 +45,11 @@ public class FloatingController {
     private View dismissTargetView;
     private final int dismissSize;
 
+    private static final int BUTTON_DP = 40;
+    private static final int GLYPH_DP = 24;
+    private static final int MIN_BUTTON_DP = 28;
+    private final java.util.List<ImageView> menuButtons = new java.util.ArrayList<>();
+
     private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable timerRunnable = new Runnable() {
         @Override
@@ -148,11 +153,11 @@ public class FloatingController {
             menuView.setVisibility(View.GONE);
             
             GradientDrawable menuBg = new GradientDrawable();
-            menuBg.setCornerRadius(dpToPx(20));
+            menuBg.setCornerRadius(dpToPx(28));
             menuBg.setColor(Color.parseColor("#B31F1F1F")); // 70% transparent dark grey
             menuBg.setStroke(dpToPx(1.5f), Color.parseColor("#66FFFFFF")); // 40% transparent white border
             menuView.setBackground(menuBg);
-            menuView.setPadding(dpToPx(6), dpToPx(3), dpToPx(6), dpToPx(3));
+            menuView.setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
             
             // Create Timer TextView
             tvTimer = new android.widget.TextView(context);
@@ -168,6 +173,8 @@ public class FloatingController {
             tvTimer.setGravity(Gravity.CENTER);
             tvTimer.setTypeface(android.graphics.Typeface.MONOSPACE);
             tvTimer.setText("00:00");
+
+            menuButtons.clear();
             
             btnPause = createMenuButton(new PauseIconDrawable(service.isPaused()), v -> {
                 if (service.isPaused()) {
@@ -395,16 +402,45 @@ public class FloatingController {
         }
     }
     
-    // Nine controls at the old 48dp pitch needed ~498dp of a 401dp screen, so the menu was clipped
     private ImageView createMenuButton(Drawable iconDrawable, View.OnClickListener listener) {
         ImageView button = new ImageView(context);
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(dpToPx(32), dpToPx(32));
-        btnParams.setMargins(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2));
-        button.setLayoutParams(btnParams);
+        button.setLayoutParams(new LinearLayout.LayoutParams(dpToPx(BUTTON_DP), dpToPx(BUTTON_DP)));
         button.setImageDrawable(iconDrawable);
-        button.setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6));
         button.setOnClickListener(listener);
+        menuButtons.add(button);
         return button;
+    }
+
+    // Button, glyph and the across-axis margin never change, so the strip is the same thickness in
+    // both layouts. Only the gap along the axis flexes, between 1dp and the original 4dp.
+    private void applyButtonSizing(boolean vertical) {
+        int count = Math.max(menuButtons.size(), 1);
+        Point screen = getScreenSize();
+        int available = (vertical ? screen.y : screen.x) - dpToPx(8);
+        int reserved = vertical ? dpToPx(20) : dpToPx(50); // timer, worst case 00:00:00
+        int chrome = dpToPx(8);                            // menu padding along the axis
+
+        int room = available - reserved - chrome;
+        int size = Math.min(dpToPx(BUTTON_DP), room / count);
+        size = Math.max(dpToPx(MIN_BUTTON_DP), size);
+
+        int spare = room - size * count;
+        int gap = Math.max(dpToPx(1), Math.min(spare / (count * 2), dpToPx(4)));
+        int across = dpToPx(2);
+        int padding = Math.max(0, (size - dpToPx(GLYPH_DP)) / 2);
+
+        for (ImageView button : menuButtons) {
+            LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) button.getLayoutParams();
+            p.width = size;
+            p.height = size;
+            if (vertical) {
+                p.setMargins(across, gap, across, gap);
+            } else {
+                p.setMargins(gap, across, gap, across);
+            }
+            button.setLayoutParams(p);
+            button.setPadding(padding, padding, padding, padding);
+        }
     }
     
     private void expand() {
@@ -587,10 +623,11 @@ public class FloatingController {
         timerParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
         timerParams.height = vertical ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
         timerParams.gravity = Gravity.CENTER;
-        int side = vertical ? 0 : dpToPx(5);
-        timerParams.setMargins(side, vertical ? dpToPx(1) : 0, side, vertical ? dpToPx(1) : 0);
+        int side = vertical ? 0 : dpToPx(8);
+        timerParams.setMargins(side, vertical ? dpToPx(2) : 0, side, vertical ? dpToPx(2) : 0);
         tvTimer.setLayoutParams(timerParams);
-        tvTimer.setTextSize(vertical ? 10f : 12f);
+        tvTimer.setTextSize(11f);
+        applyButtonSizing(vertical);
     }
 
     public void onRecordingStateChanged(boolean recording) {

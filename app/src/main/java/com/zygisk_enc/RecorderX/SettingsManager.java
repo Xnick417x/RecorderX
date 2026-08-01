@@ -53,6 +53,9 @@ public class SettingsManager {
     public void setFloatingControlEnabled(boolean enabled) { prefs.edit().putBoolean("floating_control", enabled).apply(); }
     public boolean isFloatingControlEnabled() { return prefs.getBoolean("floating_control", false); }
 
+    public void setBubbleMenuVertical(boolean vertical) { prefs.edit().putBoolean("bubble_menu_vertical", vertical).apply(); }
+    public boolean isBubbleMenuVertical() { return prefs.getBoolean("bubble_menu_vertical", true); }
+
     public void setNamingTemplate(String template) { prefs.edit().putString(KEY_NAMING_TEMPLATE, template).apply(); }
     
     public String getRawNamingTemplate() {

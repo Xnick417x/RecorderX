@@ -197,6 +197,14 @@ public class BrushController {
         }
     }
 
+    // A toolbar position dragged in one orientation lands off-screen in the other, so re-seat it
+    public void onConfigurationChanged() {
+        if (toolbarView == null || toolbarParams == null) return;
+        toolbarParams.x = 0;
+        toolbarParams.y = dpToPx(80);
+        try { windowManager.updateViewLayout(toolbarView, toolbarParams); } catch (Exception ignored) {}
+    }
+
     private void setDrawingTouchable(boolean touchable) {
         if (drawingView == null || drawingParams == null) return;
         if (touchable) {

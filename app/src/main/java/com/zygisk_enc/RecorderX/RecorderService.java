@@ -32,6 +32,8 @@ public class RecorderService extends Service {
     public static final String ACTION_PAUSE = "ACTION_PAUSE";
     public static final String ACTION_RESUME = "ACTION_RESUME";
     public static final String ACTION_DELETE = "ACTION_DELETE";
+    public static final String ACTION_SHOW_BUBBLE = "ACTION_SHOW_BUBBLE";
+    public static final String ACTION_HIDE_BUBBLE = "ACTION_HIDE_BUBBLE";
     public static final String EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE";
     public static final String EXTRA_DATA = "EXTRA_DATA";
 
@@ -111,6 +113,10 @@ public class RecorderService extends Service {
             pauseRecording();
         } else if (ACTION_RESUME.equals(action)) {
             resumeRecording();
+        } else if (ACTION_SHOW_BUBBLE.equals(action)) {
+            showBubble();
+        } else if (ACTION_HIDE_BUBBLE.equals(action)) {
+            hideBubble();
         } else if (ACTION_DELETE.equals(action)) {
             String deleteUriStr = intent.getStringExtra("delete_uri");
             String deletePath = intent.getStringExtra("delete_path");
@@ -158,8 +164,11 @@ public class RecorderService extends Service {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
                         Log.w(TAG, "Cannot show floating control: overlay permission not granted");
                     } else {
-                        floatingController = new FloatingController(this);
+                        if (floatingController == null) {
+                            floatingController = new FloatingController(this);
+                        }
                         floatingController.show();
+                        floatingController.onRecordingStateChanged(true);
                     }
                 }
             } catch (Exception e) {
@@ -168,24 +177,30 @@ public class RecorderService extends Service {
                     recordingSession.stop();
                     recordingSession = null;
                 }
-                stopForeground(true);
-                stopSelf();
+                isRecording = false;
+                notifyStateChanged();
+                fallBackToIdleOrStop();
             }
         } else {
             Log.e(TAG, "MediaProjection unavailable, aborting");
-            stopForeground(true);
-            stopSelf();
+            fallBackToIdleOrStop();
         }
+    }
+
+    // A failed capture should not take the bubble down with it
+    private void fallBackToIdleOrStop() {
+        if (floatingController != null && new SettingsManager(this).isFloatingControlEnabled()) {
+            floatingController.onRecordingStateChanged(false);
+            enterIdleForeground();
+            return;
+        }
+        stopForeground(true);
+        stopSelf();
     }
 
     private void stopRecording() {
         if (!isRecording && recordingSession == null && floatingController == null) return;
-        Log.i(TAG, "Stopping recording service...");
-
-        if (floatingController != null) {
-            floatingController.dismiss();
-            floatingController = null;
-        }
+        Log.i(TAG, "Stopping recording...");
 
         if (recordingSession != null) {
             String lastPath = recordingSession.getOutputFilePath();
@@ -200,8 +215,105 @@ public class RecorderService extends Service {
 
         isRecording = false;
         notifyStateChanged();
+
+        // The bubble outlives a recording, so drop back to the idle foreground instead of stopping
+        if (floatingController != null && new SettingsManager(this).isFloatingControlEnabled()) {
+            floatingController.onRecordingStateChanged(false);
+            enterIdleForeground();
+            return;
+        }
+
+        if (floatingController != null) {
+            floatingController.dismiss();
+            floatingController = null;
+        }
         stopForeground(true);
         stopSelf();
+    }
+
+    private void showBubble() {
+        SettingsManager settings = new SettingsManager(this);
+        if (!settings.isFloatingControlEnabled()) {
+            if (!isRecording) stopSelf();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Cannot show floating control: overlay permission not granted");
+            if (!isRecording) stopSelf();
+            return;
+        }
+
+        if (!isRecording) enterIdleForeground();
+
+        if (floatingController == null) {
+            floatingController = new FloatingController(this);
+        }
+        floatingController.show();
+        floatingController.onRecordingStateChanged(isRecording);
+    }
+
+    private void hideBubble() {
+        if (floatingController != null) {
+            floatingController.dismiss();
+            floatingController = null;
+        }
+        if (!isRecording) {
+            stopForeground(true);
+            stopSelf();
+        }
+    }
+
+    private void enterIdleForeground() {
+        createNotificationChannels();
+        Notification notification = createIdleNotification();
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not enter idle foreground state", e);
+        }
+    }
+
+    private Notification createIdleNotification() {
+        Intent hideIntent = new Intent(this, RecorderService.class);
+        hideIntent.setAction(ACTION_HIDE_BUBBLE);
+        PendingIntent hidePendingIntent = PendingIntent.getService(
+            this, 3, hideIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent openPendingIntent = PendingIntent.getActivity(
+            this, 4, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        return new Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("RecorderX controls ready")
+            .setSmallIcon(R.drawable.ic_record)
+            .setOngoing(true)
+            .setContentIntent(openPendingIntent)
+            .addAction(new Notification.Action.Builder(
+                createTextIcon("HIDE"), "Hide Bubble", hidePendingIntent
+            ).build())
+            .build();
+    }
+
+    // Own task plus no animation, so the consent prompt appears without pulling MainActivity forward
+    public void requestStartRecording() {
+        Intent intent = new Intent(this, RequestCaptureActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        startActivity(intent);
+    }
+
+    public void openMainApp() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(intent);
+    }
+
+    public void dismissBubble() {
+        hideBubble();
     }
 
     public boolean isPaused() {
@@ -468,6 +580,14 @@ public class RecorderService extends Service {
         canvas.drawText(text, width / 2f, y, paint);
         
         return android.graphics.drawable.Icon.createWithBitmap(bitmap);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (floatingController != null) {
+            floatingController.onConfigurationChanged();
+        }
     }
 
     @Override

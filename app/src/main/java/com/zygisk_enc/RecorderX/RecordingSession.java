@@ -237,6 +237,33 @@ public class RecordingSession {
 
     private boolean tryConfigureVideoEncoder(String mime, int width, int height, int fps, int bitrate, int bitrateMode, boolean useHighProfile, boolean requireHardware) {
         try {
+            videoEncoder = MediaCodec.createEncoderByType(mime);
+
+            // A CPU encoder cannot sustain screen capture. AV1 has no hardware encoder on most
+            // devices, so createEncoderByType silently hands back libaom and the capture crawls
+            if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
+                Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
+                throw new IllegalStateException("no hardware encoder for " + mime);
+            }
+
+            MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
+            MediaCodecInfo.VideoCapabilities videoCaps = caps != null ? caps.getVideoCapabilities() : null;
+            if (videoCaps != null) {
+                // Assuming 16 forced a needless 0.99 rescale of the native size, which aliases into
+                // visible scanlines. Ask the encoder what it actually needs instead
+                width = alignDown(width, videoCaps.getWidthAlignment());
+                height = alignDown(height, videoCaps.getHeightAlignment());
+                Log.i(TAG, "Encoder " + videoEncoder.getCodecInfo().getName()
+                        + " alignment " + videoCaps.getWidthAlignment() + "x" + videoCaps.getHeightAlignment()
+                        + " -> capture size " + width + "x" + height);
+
+                if (!videoCaps.getBitrateRange().contains(bitrate)) {
+                    int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
+                    Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
+                    bitrate = clampedBitrate;
+                }
+            }
+
             MediaFormat format = MediaFormat.createVideoFormat(mime, width, height);
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
@@ -250,31 +277,6 @@ public class RecordingSession {
 
             if (useHighProfile && MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime)) {
                 format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
-            }
-
-            videoEncoder = MediaCodec.createEncoderByType(mime);
-
-            // A CPU encoder cannot sustain screen capture. AV1 has no hardware encoder on most
-            // devices, so createEncoderByType silently hands back libaom and the capture crawls
-            if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
-                Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
-                throw new IllegalStateException("no hardware encoder for " + mime);
-            }
-
-            // Proactive hardware capabilities check to prevent silent encoder failures
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
-                if (caps != null) {
-                    MediaCodecInfo.VideoCapabilities videoCaps = caps.getVideoCapabilities();
-                    if (videoCaps != null) {
-                        if (!videoCaps.getBitrateRange().contains(bitrate)) {
-                            int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
-                            Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
-                            bitrate = clampedBitrate;
-                            format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
-                        }
-                    }
-                }
             }
 
             videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -293,6 +295,10 @@ public class RecordingSession {
             }
             return false;
         }
+    }
+
+    private int alignDown(int value, int alignment) {
+        return alignment <= 1 ? value : (value / alignment) * alignment;
     }
 
     private String codecLabel(String mime) {

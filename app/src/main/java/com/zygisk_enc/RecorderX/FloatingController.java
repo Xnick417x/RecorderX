@@ -499,11 +499,18 @@ public class FloatingController {
         boolean vertical = settings.isBubbleMenuVertical();
         menuView.setOrientation(vertical ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
 
+        menuView.setGravity(Gravity.CENTER);
+
+        // A vertical column is only as wide as one button, so the timer has to shed its margins
+        // and shrink or it gets clipped
         LinearLayout.LayoutParams timerParams = (LinearLayout.LayoutParams) tvTimer.getLayoutParams();
-        timerParams.width = vertical ? LinearLayout.LayoutParams.MATCH_PARENT : LinearLayout.LayoutParams.WRAP_CONTENT;
+        timerParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
         timerParams.height = vertical ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
         timerParams.gravity = Gravity.CENTER;
+        int side = vertical ? 0 : dpToPx(8);
+        timerParams.setMargins(side, vertical ? dpToPx(2) : 0, side, vertical ? dpToPx(2) : 0);
         tvTimer.setLayoutParams(timerParams);
+        tvTimer.setTextSize(vertical ? 11f : 14f);
     }
 
     public void onRecordingStateChanged(boolean recording) {

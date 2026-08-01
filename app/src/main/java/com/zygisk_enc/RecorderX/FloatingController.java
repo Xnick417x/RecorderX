@@ -29,7 +29,7 @@ public class FloatingController {
     private WindowManager.LayoutParams params;
     
     private FrameLayout bubbleView;
-    private LinearLayout menuView;
+    private DraggableMenu menuView;
     private android.widget.TextView tvTimer;
     private ImageView btnMic;
     private ImageView btnPause;
@@ -143,7 +143,7 @@ public class FloatingController {
             bubbleView.addView(icon);
             
             // 2. Menu View (Controls)
-            menuView = new LinearLayout(context);
+            menuView = new DraggableMenu(context);
             menuView.setOrientation(LinearLayout.HORIZONTAL);
             menuView.setVisibility(View.GONE);
             
@@ -371,16 +371,8 @@ public class FloatingController {
                                 params.gravity = Gravity.TOP | Gravity.START;
                             }
                             windowManager.updateViewLayout(rootLayout, params);
-                            
-                            // Persist bubble coordinates and gravity
-                            context.getSharedPreferences("floating_bubble_prefs", Context.MODE_PRIVATE)
-                                .edit()
-                                .putInt("bubble_x", params.x)
-                                .putInt("bubble_y", params.y)
-                                .putInt("bubble_gravity", params.gravity)
-                                .putBoolean("bubble_has_saved", true)
-                                .apply();
-                            
+                            persistBubblePosition();
+
                             if (duration < 200 && diffX < 10 && diffY < 10) {
                                 expand();
                             }
@@ -494,6 +486,93 @@ public class FloatingController {
         windowManager.updateViewLayout(rootLayout, params);
     }
     
+    private void persistBubblePosition() {
+        context.getSharedPreferences("floating_bubble_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putInt("bubble_x", params.x)
+            .putInt("bubble_y", params.y)
+            .putInt("bubble_gravity", params.gravity)
+            .putBoolean("bubble_has_saved", true)
+            .apply();
+    }
+
+    // Drags the expanded menu, stealing the gesture from the buttons only once it passes slop so
+    // taps still land on them, and leaving ACTION_OUTSIDE on the root alone so tap-away still closes
+    private class DraggableMenu extends LinearLayout {
+        private int startX;
+        private int startY;
+        private float downRawX;
+        private float downRawY;
+        private boolean dragging;
+
+        DraggableMenu(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent ev) {
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                downRawX = ev.getRawX();
+                downRawY = ev.getRawY();
+                dragging = false;
+            } else if (ev.getActionMasked() == MotionEvent.ACTION_MOVE && !dragging && movedPastSlop(ev)) {
+                beginDrag(ev);
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent ev) {
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downRawX = ev.getRawX();
+                    downRawY = ev.getRawY();
+                    dragging = false;
+                    return true;
+
+                case MotionEvent.ACTION_MOVE:
+                    if (!dragging) {
+                        if (!movedPastSlop(ev)) return true;
+                        beginDrag(ev);
+                    }
+                    params.x = clampX(startX + (int) (ev.getRawX() - downRawX), menuWidth());
+                    params.y = clampY(startY + (int) (ev.getRawY() - downRawY), menuHeight());
+                    windowManager.updateViewLayout(rootLayout, params);
+                    return true;
+
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (dragging) persistBubblePosition();
+                    dragging = false;
+                    return true;
+            }
+            return super.onTouchEvent(ev);
+        }
+
+        private int menuWidth() { return getWidth() > 0 ? getWidth() : bubbleSize; }
+
+        private int menuHeight() { return getHeight() > 0 ? getHeight() : bubbleSize; }
+
+        private boolean movedPastSlop(MotionEvent ev) {
+            return Math.abs(ev.getRawX() - downRawX) > dpToPx(6)
+                || Math.abs(ev.getRawY() - downRawY) > dpToPx(6);
+        }
+
+        // Re-anchor as the drag starts, so normalising away END gravity cannot jump the menu
+        private void beginDrag(MotionEvent ev) {
+            dragging = true;
+            if (params.gravity == (Gravity.TOP | Gravity.END)) {
+                params.x = getScreenSize().x - params.x - menuWidth();
+                params.gravity = Gravity.TOP | Gravity.START;
+            }
+            startX = params.x;
+            startY = params.y;
+            downRawX = ev.getRawX();
+            downRawY = ev.getRawY();
+        }
+    }
+
     private void applyMenuOrientation() {
         if (menuView == null) return;
         boolean vertical = settings.isBubbleMenuVertical();

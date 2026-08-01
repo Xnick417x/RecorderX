@@ -585,6 +585,9 @@ public class RecorderService extends Service {
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (recordingSession != null) {
+            recordingSession.onConfigurationChanged();
+        }
         if (floatingController != null) {
             floatingController.onConfigurationChanged();
         }

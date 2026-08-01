@@ -80,6 +80,9 @@ public class RecordingSession {
     private int activeWidth;
     private int activeHeight;
     private String activeMime;
+    private CaptureRenderer renderer;
+    private int sourceWidth;
+    private int sourceHeight;
     private MediaProjection.Callback projectionCallback;
     
     private volatile int videoFrameCount = 0;
@@ -216,11 +219,19 @@ public class RecordingSession {
             };
             mediaProjection.registerCallback(projectionCallback, new Handler(Looper.getMainLooper()));
 
-            Log.d(TAG, "Creating VirtualDisplay (" + activeWidth + "x" + activeHeight + ")...");
+            // Mirror at the display's own size and let the renderer fit it, rather than letting the
+            // system squeeze a rotated screen into a frame it does not match
+            sourceWidth = Math.max(metrics.widthPixels, 1);
+            sourceHeight = Math.max(metrics.heightPixels, 1);
+            renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
+                    sourceWidth, sourceHeight, settings.getOrientation() == 0);
+
+            Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
+                    + " -> " + activeWidth + "x" + activeHeight + ")...");
             virtualDisplay = mediaProjection.createVirtualDisplay("RecorderX",
-                    activeWidth, activeHeight, density,
+                    sourceWidth, sourceHeight, density,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface, null, null);
+                    renderer.getInputSurface(), null, null);
             
             if (virtualDisplay == null) {
                 throw new IOException("Failed to create virtual display");
@@ -710,6 +721,11 @@ public class RecordingSession {
             virtualDisplay = null;
         }
 
+        if (renderer != null) {
+            renderer.release();
+            renderer = null;
+        }
+
         try { if (videoEncoder != null) { videoEncoder.stop(); videoEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioEncoder != null) { audioEncoder.stop(); audioEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioRecord != null) { audioRecord.stop(); audioRecord.release(); } } catch (Exception ignored) {}
@@ -921,6 +937,29 @@ public class RecordingSession {
         } catch (Exception e) {
             Log.e(TAG, "Error saving screenshot", e);
         }
+    }
+
+    // Follow the display through a rotation: resize the mirror, then let the renderer re-fit it
+    public void onConfigurationChanged() {
+        if (!isRecording.get() || renderer == null || virtualDisplay == null) return;
+
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (wm != null) wm.getDefaultDisplay().getRealMetrics(metrics);
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return;
+        if (metrics.widthPixels == sourceWidth && metrics.heightPixels == sourceHeight) return;
+
+        sourceWidth = metrics.widthPixels;
+        sourceHeight = metrics.heightPixels;
+        Log.i(TAG, "Display rotated, mirroring at " + sourceWidth + "x" + sourceHeight);
+
+        try {
+            virtualDisplay.resize(sourceWidth, sourceHeight,
+                    metrics.densityDpi > 0 ? metrics.densityDpi : 300);
+        } catch (Exception e) {
+            Log.e(TAG, "VirtualDisplay resize failed", e);
+        }
+        renderer.setSourceSize(sourceWidth, sourceHeight);
     }
 
     public long getActiveDurationMs() {

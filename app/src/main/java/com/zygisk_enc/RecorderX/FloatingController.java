@@ -72,7 +72,7 @@ public class FloatingController {
         this.service = service;
         this.context = service;
         this.windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        this.bubbleSize = dpToPx(48); // Reduced size from 56dp to 48dp
+        this.bubbleSize = dpToPx(42);
         this.settings = new SettingsManager(service);
         this.dismissSize = dpToPx(64);
     }
@@ -148,11 +148,11 @@ public class FloatingController {
             menuView.setVisibility(View.GONE);
             
             GradientDrawable menuBg = new GradientDrawable();
-            menuBg.setCornerRadius(dpToPx(28));
+            menuBg.setCornerRadius(dpToPx(20));
             menuBg.setColor(Color.parseColor("#B31F1F1F")); // 70% transparent dark grey
             menuBg.setStroke(dpToPx(1.5f), Color.parseColor("#66FFFFFF")); // 40% transparent white border
             menuView.setBackground(menuBg);
-            menuView.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
+            menuView.setPadding(dpToPx(6), dpToPx(3), dpToPx(6), dpToPx(3));
             
             // Create Timer TextView
             tvTimer = new android.widget.TextView(context);
@@ -395,13 +395,14 @@ public class FloatingController {
         }
     }
     
+    // Nine controls at the old 48dp pitch needed ~498dp of a 401dp screen, so the menu was clipped
     private ImageView createMenuButton(Drawable iconDrawable, View.OnClickListener listener) {
         ImageView button = new ImageView(context);
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(dpToPx(40), dpToPx(40));
-        btnParams.setMargins(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(dpToPx(32), dpToPx(32));
+        btnParams.setMargins(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2));
         button.setLayoutParams(btnParams);
         button.setImageDrawable(iconDrawable);
-        button.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
+        button.setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6));
         button.setOnClickListener(listener);
         return button;
     }
@@ -586,10 +587,10 @@ public class FloatingController {
         timerParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
         timerParams.height = vertical ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
         timerParams.gravity = Gravity.CENTER;
-        int side = vertical ? 0 : dpToPx(8);
-        timerParams.setMargins(side, vertical ? dpToPx(2) : 0, side, vertical ? dpToPx(2) : 0);
+        int side = vertical ? 0 : dpToPx(5);
+        timerParams.setMargins(side, vertical ? dpToPx(1) : 0, side, vertical ? dpToPx(1) : 0);
         tvTimer.setLayoutParams(timerParams);
-        tvTimer.setTextSize(vertical ? 11f : 14f);
+        tvTimer.setTextSize(vertical ? 10f : 12f);
     }
 
     public void onRecordingStateChanged(boolean recording) {

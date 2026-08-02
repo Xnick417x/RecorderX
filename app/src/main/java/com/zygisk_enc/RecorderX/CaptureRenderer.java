@@ -22,6 +22,7 @@ import java.nio.FloatBuffer;
 class CaptureRenderer {
     private static final String TAG = "RecorderX_Renderer";
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
+    private static final long GEOMETRY_SETTLE_NS = 200_000_000L;
 
     private static final String VERTEX_SHADER =
         "uniform mat4 uMvp;\n" +
@@ -78,7 +79,7 @@ class CaptureRenderer {
     private int sourceHeight;
     private final boolean allowRotation;
     private int displayRotation;
-    private int settleFrames;
+    private long holdUntilNs;
     private final long minFrameIntervalNs;
     private long lastPresentedNs;
     private long nextPresentNs;
@@ -142,7 +143,7 @@ class CaptureRenderer {
             sourceWidth = width;
             sourceHeight = height;
             displayRotation = rotation;
-            settleFrames = 3;
+            holdUntilNs = System.nanoTime() + GEOMETRY_SETTLE_NS;
             surfaceTexture.setDefaultBufferSize(width, height);
             Log.i(TAG, "Source size now " + width + "x" + height + " rotation " + rotation);
         });
@@ -285,10 +286,7 @@ class CaptureRenderer {
             surfaceTexture.updateTexImage();
 
             // Drain but do not present while the geometry swaps, so the encoder repeats the last
-            if (settleFrames > 0) {
-                settleFrames--;
-                return;
-            }
+            if (System.nanoTime() < holdUntilNs) return;
 
             // The mirror runs at the panel's refresh rate, so drop frames to hit the chosen fps
             long frameNs = surfaceTexture.getTimestamp();

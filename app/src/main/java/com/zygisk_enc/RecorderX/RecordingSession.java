@@ -80,6 +80,9 @@ public class RecordingSession {
     private int activeWidth;
     private int activeHeight;
     private String activeMime;
+    private CaptureRenderer renderer;
+    private int sourceWidth;
+    private int sourceHeight;
     private MediaProjection.Callback projectionCallback;
     
     private volatile int videoFrameCount = 0;
@@ -216,11 +219,18 @@ public class RecordingSession {
             };
             mediaProjection.registerCallback(projectionCallback, new Handler(Looper.getMainLooper()));
 
-            Log.d(TAG, "Creating VirtualDisplay (" + activeWidth + "x" + activeHeight + ")...");
+            // Mirror at the display's own size and let the renderer do the fitting
+            sourceWidth = Math.max(metrics.widthPixels, 1);
+            sourceHeight = Math.max(metrics.heightPixels, 1);
+            renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
+                    sourceWidth, sourceHeight, settings.getOrientation() == 0);
+
+            Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
+                    + " -> " + activeWidth + "x" + activeHeight + ")...");
             virtualDisplay = mediaProjection.createVirtualDisplay("RecorderX",
-                    activeWidth, activeHeight, density,
+                    sourceWidth, sourceHeight, density,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface, null, null);
+                    renderer.getInputSurface(), null, null);
             
             if (virtualDisplay == null) {
                 throw new IOException("Failed to create virtual display");
@@ -237,6 +247,31 @@ public class RecordingSession {
 
     private boolean tryConfigureVideoEncoder(String mime, int width, int height, int fps, int bitrate, int bitrateMode, boolean useHighProfile, boolean requireHardware) {
         try {
+            videoEncoder = MediaCodec.createEncoderByType(mime);
+
+            // Most devices have no hardware AV1 encoder, so this quietly returns libaom
+            if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
+                Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
+                throw new IllegalStateException("no hardware encoder for " + mime);
+            }
+
+            MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
+            MediaCodecInfo.VideoCapabilities videoCaps = caps != null ? caps.getVideoCapabilities() : null;
+            if (videoCaps != null) {
+                // Assuming 16 forced a rescale of the native size that aliased into scanlines
+                width = alignDown(width, videoCaps.getWidthAlignment());
+                height = alignDown(height, videoCaps.getHeightAlignment());
+                Log.i(TAG, "Encoder " + videoEncoder.getCodecInfo().getName()
+                        + " alignment " + videoCaps.getWidthAlignment() + "x" + videoCaps.getHeightAlignment()
+                        + " -> capture size " + width + "x" + height);
+
+                if (!videoCaps.getBitrateRange().contains(bitrate)) {
+                    int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
+                    Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
+                    bitrate = clampedBitrate;
+                }
+            }
+
             MediaFormat format = MediaFormat.createVideoFormat(mime, width, height);
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
@@ -250,31 +285,6 @@ public class RecordingSession {
 
             if (useHighProfile && MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime)) {
                 format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
-            }
-
-            videoEncoder = MediaCodec.createEncoderByType(mime);
-
-            // A CPU encoder cannot sustain screen capture. AV1 has no hardware encoder on most
-            // devices, so createEncoderByType silently hands back libaom and the capture crawls
-            if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
-                Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
-                throw new IllegalStateException("no hardware encoder for " + mime);
-            }
-
-            // Proactive hardware capabilities check to prevent silent encoder failures
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
-                if (caps != null) {
-                    MediaCodecInfo.VideoCapabilities videoCaps = caps.getVideoCapabilities();
-                    if (videoCaps != null) {
-                        if (!videoCaps.getBitrateRange().contains(bitrate)) {
-                            int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
-                            Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
-                            bitrate = clampedBitrate;
-                            format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
-                        }
-                    }
-                }
             }
 
             videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -293,6 +303,10 @@ public class RecordingSession {
             }
             return false;
         }
+    }
+
+    private int alignDown(int value, int alignment) {
+        return alignment <= 1 ? value : (value / alignment) * alignment;
     }
 
     private String codecLabel(String mime) {
@@ -704,6 +718,11 @@ public class RecordingSession {
             virtualDisplay = null;
         }
 
+        if (renderer != null) {
+            renderer.release();
+            renderer = null;
+        }
+
         try { if (videoEncoder != null) { videoEncoder.stop(); videoEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioEncoder != null) { audioEncoder.stop(); audioEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioRecord != null) { audioRecord.stop(); audioRecord.release(); } } catch (Exception ignored) {}
@@ -915,6 +934,29 @@ public class RecordingSession {
         } catch (Exception e) {
             Log.e(TAG, "Error saving screenshot", e);
         }
+    }
+
+    // Follow the display through a rotation: resize the mirror, then let the renderer re-fit it
+    public void onConfigurationChanged() {
+        if (!isRecording.get() || renderer == null || virtualDisplay == null) return;
+
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (wm != null) wm.getDefaultDisplay().getRealMetrics(metrics);
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return;
+        if (metrics.widthPixels == sourceWidth && metrics.heightPixels == sourceHeight) return;
+
+        sourceWidth = metrics.widthPixels;
+        sourceHeight = metrics.heightPixels;
+        Log.i(TAG, "Display rotated, mirroring at " + sourceWidth + "x" + sourceHeight);
+
+        try {
+            virtualDisplay.resize(sourceWidth, sourceHeight,
+                    metrics.densityDpi > 0 ? metrics.densityDpi : 300);
+        } catch (Exception e) {
+            Log.e(TAG, "VirtualDisplay resize failed", e);
+        }
+        renderer.setSourceSize(sourceWidth, sourceHeight);
     }
 
     public long getActiveDurationMs() {

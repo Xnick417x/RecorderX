@@ -36,6 +36,7 @@ public class FloatingController {
     private ImageView btnRecordStop;
     private ImageView btnScreenshot;
     private ImageView btnLayout;
+    private ImageView btnGear;
     private BrushController brushController;
     private boolean isExpanded = false;
     private boolean isShowing = false;
@@ -44,6 +45,11 @@ public class FloatingController {
     private final SettingsManager settings;
     private View dismissTargetView;
     private final int dismissSize;
+
+    private static final int BUTTON_DP = 40;
+    private static final int GLYPH_DP = 24;
+    private static final int MIN_BUTTON_DP = 28;
+    private final java.util.List<ImageView> menuButtons = new java.util.ArrayList<>();
 
     private final android.os.Handler timerHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable timerRunnable = new Runnable() {
@@ -72,7 +78,7 @@ public class FloatingController {
         this.service = service;
         this.context = service;
         this.windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        this.bubbleSize = dpToPx(48); // Reduced size from 56dp to 48dp
+        this.bubbleSize = dpToPx(42);
         this.settings = new SettingsManager(service);
         this.dismissSize = dpToPx(64);
     }
@@ -140,6 +146,7 @@ public class FloatingController {
             icon.setLayoutParams(iconParams);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
             icon.setImageResource(R.mipmap.ic_launcher);
+            icon.setAlpha(0.8f);
             bubbleView.addView(icon);
             
             // 2. Menu View (Controls)
@@ -149,10 +156,9 @@ public class FloatingController {
             
             GradientDrawable menuBg = new GradientDrawable();
             menuBg.setCornerRadius(dpToPx(28));
-            menuBg.setColor(Color.parseColor("#B31F1F1F")); // 70% transparent dark grey
-            menuBg.setStroke(dpToPx(1.5f), Color.parseColor("#66FFFFFF")); // 40% transparent white border
+            menuBg.setColor(Color.parseColor("#991F1F1F"));
             menuView.setBackground(menuBg);
-            menuView.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
+            menuView.setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
             
             // Create Timer TextView
             tvTimer = new android.widget.TextView(context);
@@ -163,11 +169,13 @@ public class FloatingController {
             timerParams.gravity = Gravity.CENTER_VERTICAL;
             timerParams.setMargins(dpToPx(8), 0, dpToPx(8), 0);
             tvTimer.setLayoutParams(timerParams);
-            tvTimer.setTextColor(Color.WHITE);
+            tvTimer.setTextColor(Color.parseColor("#C2FFFFFF"));
             tvTimer.setTextSize(14f);
             tvTimer.setGravity(Gravity.CENTER);
             tvTimer.setTypeface(android.graphics.Typeface.MONOSPACE);
             tvTimer.setText("00:00");
+
+            menuButtons.clear();
             
             btnPause = createMenuButton(new PauseIconDrawable(service.isPaused()), v -> {
                 if (service.isPaused()) {
@@ -258,15 +266,15 @@ public class FloatingController {
                 brushController.show();
             });
 
-            btnLayout = createMenuButton(new LayoutIconDrawable(settings.isBubbleMenuVertical()), v -> {
+            btnLayout = createMenuButton(new RotateIconDrawable(settings.isBubbleMenuVertical()), v -> {
                 boolean nextVertical = !settings.isBubbleMenuVertical();
                 settings.setBubbleMenuVertical(nextVertical);
-                ((ImageView) v).setImageDrawable(new LayoutIconDrawable(nextVertical));
+                ((ImageView) v).setImageDrawable(new RotateIconDrawable(nextVertical));
                 applyMenuOrientation();
                 windowManager.updateViewLayout(rootLayout, params);
             });
 
-            ImageView btnGear = createMenuButton(new GearIconDrawable(), v -> {
+            btnGear = createMenuButton(new GearIconDrawable(), v -> {
                 collapse();
                 service.openMainApp();
             });
@@ -397,20 +405,55 @@ public class FloatingController {
     
     private ImageView createMenuButton(Drawable iconDrawable, View.OnClickListener listener) {
         ImageView button = new ImageView(context);
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(dpToPx(40), dpToPx(40));
-        btnParams.setMargins(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
-        button.setLayoutParams(btnParams);
+        button.setLayoutParams(new LinearLayout.LayoutParams(dpToPx(BUTTON_DP), dpToPx(BUTTON_DP)));
         button.setImageDrawable(iconDrawable);
-        button.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
+        button.setAlpha(0.72f);
         button.setOnClickListener(listener);
+        menuButtons.add(button);
         return button;
+    }
+
+    // Button and glyph sizes are fixed; only the gap along the axis flexes
+    private void applyButtonSizing(boolean vertical) {
+        int count = 0;
+        for (ImageView button : menuButtons) {
+            if (button.getVisibility() != View.GONE) count++;
+        }
+        count = Math.max(count, 1);
+        Point screen = getScreenSize();
+        int available = (vertical ? screen.y : screen.x) - dpToPx(8);
+        int reserved = vertical ? dpToPx(20) : dpToPx(50); // timer, worst case 00:00:00
+        int chrome = dpToPx(8);                            // menu padding along the axis
+
+        int room = available - reserved - chrome;
+        int size = Math.min(dpToPx(BUTTON_DP), room / count);
+        size = Math.max(dpToPx(MIN_BUTTON_DP), size);
+
+        int spare = room - size * count;
+        int gap = Math.max(dpToPx(1), Math.min(spare / (count * 2), dpToPx(4)));
+        int across = dpToPx(2);
+        int padding = Math.max(0, (size - dpToPx(GLYPH_DP)) / 2);
+
+        for (ImageView button : menuButtons) {
+            LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) button.getLayoutParams();
+            p.width = size;
+            p.height = size;
+            if (vertical) {
+                p.setMargins(across, gap, across, gap);
+            } else {
+                p.setMargins(gap, across, gap, across);
+            }
+            button.setLayoutParams(p);
+            button.setPadding(padding, padding, padding, padding);
+        }
     }
     
     private void expand() {
         if (isExpanded) return;
 
-        applyMenuOrientation();
+        // Visibility first: the sizing divides the strip between the buttons that are actually shown
         applyRecordingVisibility();
+        applyMenuOrientation();
 
         // Measure instead of assuming: the menu changes size with orientation and with what is visible
         int unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
@@ -496,8 +539,7 @@ public class FloatingController {
             .apply();
     }
 
-    // Drags the expanded menu, stealing the gesture from the buttons only once it passes slop so
-    // taps still land on them, and leaving ACTION_OUTSIDE on the root alone so tap-away still closes
+    // Steals the gesture from the buttons only past slop, so taps still land on them
     private class DraggableMenu extends LinearLayout {
         private int startX;
         private int startY;
@@ -575,13 +617,16 @@ public class FloatingController {
 
     private void applyMenuOrientation() {
         if (menuView == null) return;
-        boolean vertical = settings.isBubbleMenuVertical();
+
+        // The setting means along the phone's long edge, so it flips with the device
+        boolean deviceLandscape = context.getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+        boolean vertical = settings.isBubbleMenuVertical() ^ deviceLandscape;
         menuView.setOrientation(vertical ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
 
         menuView.setGravity(Gravity.CENTER);
 
-        // A vertical column is only as wide as one button, so the timer has to shed its margins
-        // and shrink or it gets clipped
+        // A vertical column is one button wide, so the timer sheds its margins and shrinks
         LinearLayout.LayoutParams timerParams = (LinearLayout.LayoutParams) tvTimer.getLayoutParams();
         timerParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
         timerParams.height = vertical ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
@@ -589,7 +634,8 @@ public class FloatingController {
         int side = vertical ? 0 : dpToPx(8);
         timerParams.setMargins(side, vertical ? dpToPx(2) : 0, side, vertical ? dpToPx(2) : 0);
         tvTimer.setLayoutParams(timerParams);
-        tvTimer.setTextSize(vertical ? 11f : 14f);
+        tvTimer.setTextSize(11f);
+        applyButtonSizing(vertical);
     }
 
     public void onRecordingStateChanged(boolean recording) {
@@ -607,7 +653,11 @@ public class FloatingController {
             btnPause.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
             btnPause.setImageDrawable(new PauseIconDrawable(service.isPaused()));
         }
-        if (btnScreenshot != null) btnScreenshot.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
+        // On 14+ the shot goes through accessibility and needs no capture session
+        if (btnScreenshot != null) btnScreenshot.setVisibility(View.VISIBLE);
+        if (btnGear != null) {
+            btnGear.setVisibility(settings.isBubbleGearEnabled() ? View.VISIBLE : View.GONE);
+        }
         if (tvTimer != null) tvTimer.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
         if (btnMic != null) {
             boolean showMic = isRecordingActive && service.isAudioSourceSystem();
@@ -1024,14 +1074,15 @@ public class FloatingController {
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
-    private static class LayoutIconDrawable extends Drawable {
+    private static class RotateIconDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final boolean isVertical;
 
-        public LayoutIconDrawable(boolean isVertical) {
+        public RotateIconDrawable(boolean isVertical) {
             this.isVertical = isVertical;
             paint.setColor(Color.WHITE);
-            paint.setStyle(Paint.Style.FILL);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
         }
 
         @Override
@@ -1039,20 +1090,37 @@ public class FloatingController {
             int w = getBounds().width();
             int h = getBounds().height();
             float size = Math.min(w, h);
-            float thickness = size * 0.15f;
-            float gap = size * 0.10f;
-            float span = thickness * 3 + gap * 2;
+            float cx = w * 0.5f;
+            float cy = h * 0.5f;
 
-            for (int i = 0; i < 3; i++) {
-                float offset = i * (thickness + gap);
-                if (isVertical) {
-                    float top = (h - span) / 2f + offset;
-                    canvas.drawRoundRect(w * 0.25f, top, w * 0.75f, top + thickness, 4f, 4f, paint);
-                } else {
-                    float left = (w - span) / 2f + offset;
-                    canvas.drawRoundRect(left, h * 0.25f, left + thickness, h * 0.75f, 4f, 4f, paint);
-                }
-            }
+            // the slab in the middle still shows which way the menu will sit
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(size * 0.085f);
+            float shortHalf = size * 0.12f;
+            float longHalf = size * 0.19f;
+            android.graphics.RectF body = isVertical
+                ? new android.graphics.RectF(cx - shortHalf, cy - longHalf, cx + shortHalf, cy + longHalf)
+                : new android.graphics.RectF(cx - longHalf, cy - shortHalf, cx + longHalf, cy + shortHalf);
+            canvas.drawRoundRect(body, size * 0.05f, size * 0.05f, paint);
+
+            float r = size * 0.37f;
+            android.graphics.RectF oval = new android.graphics.RectF(cx - r, cy - r, cx + r, cy + r);
+            paint.setStrokeWidth(size * 0.075f);
+            canvas.drawArc(oval, 150, 110, false, paint);
+            canvas.drawArc(oval, -30, 110, false, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            arrowHead(canvas, cx, cy - r, 1f, 0f, size * 0.13f);
+            arrowHead(canvas, cx, cy + r, -1f, 0f, size * 0.13f);
+        }
+
+        private void arrowHead(Canvas canvas, float x, float y, float dx, float dy, float s) {
+            Path p = new Path();
+            p.moveTo(x + dx * s, y + dy * s);
+            p.lineTo(x - dy * s * 0.75f, y + dx * s * 0.75f);
+            p.lineTo(x + dy * s * 0.75f, y - dx * s * 0.75f);
+            p.close();
+            canvas.drawPath(p, paint);
         }
 
         @Override public void setAlpha(int alpha) {}

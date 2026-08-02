@@ -56,6 +56,9 @@ public class SettingsManager {
     public void setBubbleMenuVertical(boolean vertical) { prefs.edit().putBoolean("bubble_menu_vertical", vertical).apply(); }
     public boolean isBubbleMenuVertical() { return prefs.getBoolean("bubble_menu_vertical", true); }
 
+    public void setBubbleGearEnabled(boolean enabled) { prefs.edit().putBoolean("bubble_gear", enabled).apply(); }
+    public boolean isBubbleGearEnabled() { return prefs.getBoolean("bubble_gear", true); }
+
     public void setNamingTemplate(String template) { prefs.edit().putString(KEY_NAMING_TEMPLATE, template).apply(); }
     
     public String getRawNamingTemplate() {
@@ -90,7 +93,7 @@ public class SettingsManager {
             case 5: width = isLandscape ? 854 : 480; break;   // 480p
             default: width = isLandscape ? longSide : shortSide; break;
         }
-        return makeMultipleOf16(width);
+        return makeEven(width);
     }
 
     public int getResolutionHeight() {
@@ -113,11 +116,12 @@ public class SettingsManager {
             case 5: height = isLandscape ? 480 : 854; break;   // 480p
             default: height = isLandscape ? shortSide : longSide; break;
         }
-        return makeMultipleOf16(height);
+        return makeEven(height);
     }
 
-    private int makeMultipleOf16(int value) {
-        return (value / 16) * 16;
+    // Only chroma subsampling needs even dimensions here; the encoder's own alignment is applied later
+    private int makeEven(int value) {
+        return value & ~1;
     }
 
     private DisplayMetrics getMetrics() {

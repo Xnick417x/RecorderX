@@ -26,6 +26,7 @@ public class RecorderService extends Service {
     private static final int SAVED_NOTIFICATION_ID = 2;
     private static final String CHANNEL_ID = "recorder_channel";
     private static final String SAVED_CHANNEL_ID = "saved_channel";
+    private static final String IDLE_CHANNEL_ID = "bubble_channel_v2";
 
     public static final String ACTION_START = "ACTION_START";
     public static final String ACTION_STOP = "ACTION_STOP";
@@ -288,10 +289,12 @@ public class RecorderService extends Service {
         PendingIntent openPendingIntent = PendingIntent.getActivity(
             this, 4, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        return new Notification.Builder(this, CHANNEL_ID)
+        return new Notification.Builder(this, IDLE_CHANNEL_ID)
             .setContentTitle("RecorderX controls ready")
             .setSmallIcon(R.drawable.ic_record)
             .setOngoing(true)
+            .setPriority(Notification.PRIORITY_MIN)
+            .setVisibility(Notification.VISIBILITY_SECRET)
             .setContentIntent(openPendingIntent)
             .addAction(new Notification.Action.Builder(
                 createTextIcon("HIDE"), "Hide Bubble", hidePendingIntent
@@ -352,6 +355,11 @@ public class RecorderService extends Service {
             if (recordingSession != null) {
                 recordingSession.takeScreenshot(onCompleted);
             } else {
+                // Below 14 the shot is taken off the capture session, so there has to be one
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        android.widget.Toast.makeText(this,
+                                "Screenshots need a recording on this Android version",
+                                android.widget.Toast.LENGTH_SHORT).show());
                 if (onCompleted != null) onCompleted.run();
             }
         }
@@ -507,6 +515,15 @@ public class RecorderService extends Service {
             
             NotificationChannel savedChannel = new NotificationChannel(SAVED_CHANNEL_ID, "Recording Saved", NotificationManager.IMPORTANCE_HIGH);
             manager.createNotificationChannel(savedChannel);
+
+            // MIN keeps it out of the status bar; the id is versioned as channel settings freeze
+            manager.deleteNotificationChannel("bubble_channel");
+            NotificationChannel idleChannel = new NotificationChannel(IDLE_CHANNEL_ID, "Floating Controls", NotificationManager.IMPORTANCE_MIN);
+            idleChannel.setShowBadge(false);
+            idleChannel.setSound(null, null);
+            idleChannel.enableVibration(false);
+            idleChannel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+            manager.createNotificationChannel(idleChannel);
         }
     }
 
@@ -585,6 +602,9 @@ public class RecorderService extends Service {
     @Override
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (recordingSession != null) {
+            recordingSession.onConfigurationChanged();
+        }
         if (floatingController != null) {
             floatingController.onConfigurationChanged();
         }

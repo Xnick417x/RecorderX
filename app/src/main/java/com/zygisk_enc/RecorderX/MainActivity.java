@@ -48,6 +48,8 @@ public class MainActivity extends AppCompatActivity {
         android.graphics.Color.parseColor("#F43F5E")  // 11: Rose Pink
     };
 
+    private static final int DEFAULT_ACCENT_INDEX = 6; // Cyan/Teal
+
     private final RecorderService.RecordingStateListener recordingStateListener = new RecorderService.RecordingStateListener() {
         @Override
         public void onStateChanged(boolean isRecording) {
@@ -304,7 +306,7 @@ public class MainActivity extends AppCompatActivity {
                             float threshold = 8 * density; // Super sensitive 8dp threshold for quick little swipes!
                             
                             if (Math.abs(deltaX) > threshold) {
-                                int currentIdx = themePrefs.getInt("accent_color_index", 1);
+                                int currentIdx = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
                                 int newIdx;
                                 if (deltaX > 0) {
                                     // Swipe Right -> Next Color
@@ -327,7 +329,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Apply saved accent color on startup (default to Yellow: index 1)
-        int savedColorIndex = themePrefs.getInt("accent_color_index", 1);
+        int savedColorIndex = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
         applyAccentColor(ACCENT_COLORS[savedColorIndex]);
 
         // Video Settings
@@ -497,11 +499,18 @@ public class MainActivity extends AppCompatActivity {
                         .show();
                 } else {
                     settingsManager.setFloatingControlEnabled(true);
+                    setBubbleVisible(true);
                 }
             } else {
                 settingsManager.setFloatingControlEnabled(false);
+                setBubbleVisible(false);
             }
         });
+
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        switchGear.setChecked(settingsManager.isBubbleGearEnabled());
+        switchGear.setOnCheckedChangeListener((buttonView, isChecked) ->
+                settingsManager.setBubbleGearEnabled(isChecked));
 
         // Output Settings
         TextInputEditText namingInput = findViewById(R.id.namingTemplateEditText);
@@ -635,6 +644,20 @@ public class MainActivity extends AppCompatActivity {
         btnRecord.setText(R.string.start_recording);
     }
 
+    private void setBubbleVisible(boolean visible) {
+        Intent intent = new Intent(this, RecorderService.class);
+        intent.setAction(visible ? RecorderService.ACTION_SHOW_BUBBLE : RecorderService.ACTION_HIDE_BUBBLE);
+        try {
+            if (visible) {
+                ContextCompat.startForegroundService(this, intent);
+            } else {
+                startService(intent);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("RecorderX_Main", "Bubble toggle failed", e);
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -657,6 +680,12 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         
+        // Opening the app brings the bubble back if it was dragged onto the dismiss target
+        if (settingsManager.isFloatingControlEnabled()
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this))) {
+            setBubbleVisible(true);
+        }
+
         if (getIntent() != null && getIntent().getBooleanExtra("AUTO_START", false)) {
             getIntent().removeExtra("AUTO_START");
             if (!RecorderService.isRecording()) {
@@ -712,6 +741,10 @@ public class MainActivity extends AppCompatActivity {
         if (switchFloating != null) {
             switchFloating.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
         }
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        if (switchGear != null) {
+            switchGear.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
+        }
         
         // 6. TextInputLayout
         com.google.android.material.textfield.TextInputLayout layoutTemplate = findViewById(R.id.namingTemplateLayout);
@@ -726,9 +759,9 @@ public class MainActivity extends AppCompatActivity {
 
     private int getActiveAccentColor() {
         android.content.SharedPreferences themePrefs = getSharedPreferences("theme_prefs", MODE_PRIVATE);
-        int index = themePrefs.getInt("accent_color_index", 1); // Default to Yellow (index 1)
+        int index = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
         if (index < 0 || index >= ACCENT_COLORS.length) {
-            index = 1;
+            index = DEFAULT_ACCENT_INDEX;
         }
         return ACCENT_COLORS[index];
     }

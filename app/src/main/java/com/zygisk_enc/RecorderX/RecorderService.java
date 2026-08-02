@@ -26,6 +26,7 @@ public class RecorderService extends Service {
     private static final int SAVED_NOTIFICATION_ID = 2;
     private static final String CHANNEL_ID = "recorder_channel";
     private static final String SAVED_CHANNEL_ID = "saved_channel";
+    private static final String IDLE_CHANNEL_ID = "bubble_channel";
 
     public static final String ACTION_START = "ACTION_START";
     public static final String ACTION_STOP = "ACTION_STOP";
@@ -288,10 +289,11 @@ public class RecorderService extends Service {
         PendingIntent openPendingIntent = PendingIntent.getActivity(
             this, 4, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        return new Notification.Builder(this, CHANNEL_ID)
+        return new Notification.Builder(this, IDLE_CHANNEL_ID)
             .setContentTitle("RecorderX controls ready")
             .setSmallIcon(R.drawable.ic_record)
             .setOngoing(true)
+            .setPriority(Notification.PRIORITY_MIN)
             .setContentIntent(openPendingIntent)
             .addAction(new Notification.Action.Builder(
                 createTextIcon("HIDE"), "Hide Bubble", hidePendingIntent
@@ -512,6 +514,13 @@ public class RecorderService extends Service {
             
             NotificationChannel savedChannel = new NotificationChannel(SAVED_CHANNEL_ID, "Recording Saved", NotificationManager.IMPORTANCE_HIGH);
             manager.createNotificationChannel(savedChannel);
+
+            // A foreground service must post something; MIN keeps it out of the status bar
+            NotificationChannel idleChannel = new NotificationChannel(IDLE_CHANNEL_ID, "Floating Controls", NotificationManager.IMPORTANCE_MIN);
+            idleChannel.setShowBadge(false);
+            idleChannel.setSound(null, null);
+            idleChannel.enableVibration(false);
+            manager.createNotificationChannel(idleChannel);
         }
     }
 

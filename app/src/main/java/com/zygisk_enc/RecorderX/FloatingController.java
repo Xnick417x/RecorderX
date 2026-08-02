@@ -413,8 +413,7 @@ public class FloatingController {
         return button;
     }
 
-    // Button, glyph and the across-axis margin never change, so the strip is the same thickness in
-    // both layouts. Only the gap along the axis flexes, between 1dp and the original 4dp.
+    // Button and glyph sizes are fixed; only the gap along the axis flexes
     private void applyButtonSizing(boolean vertical) {
         int count = 0;
         for (ImageView button : menuButtons) {
@@ -540,8 +539,7 @@ public class FloatingController {
             .apply();
     }
 
-    // Drags the expanded menu, stealing the gesture from the buttons only once it passes slop so
-    // taps still land on them, and leaving ACTION_OUTSIDE on the root alone so tap-away still closes
+    // Steals the gesture from the buttons only past slop, so taps still land on them
     private class DraggableMenu extends LinearLayout {
         private int startX;
         private int startY;
@@ -620,8 +618,7 @@ public class FloatingController {
     private void applyMenuOrientation() {
         if (menuView == null) return;
 
-        // The setting means "along the phone's long edge", so it has to flip with the device;
-        // otherwise a vertical menu ends up running across the short side in a landscape app
+        // The setting means along the phone's long edge, so it flips with the device
         boolean deviceLandscape = context.getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
         boolean vertical = settings.isBubbleMenuVertical() ^ deviceLandscape;
@@ -629,8 +626,7 @@ public class FloatingController {
 
         menuView.setGravity(Gravity.CENTER);
 
-        // A vertical column is only as wide as one button, so the timer has to shed its margins
-        // and shrink or it gets clipped
+        // A vertical column is one button wide, so the timer sheds its margins and shrinks
         LinearLayout.LayoutParams timerParams = (LinearLayout.LayoutParams) tvTimer.getLayoutParams();
         timerParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
         timerParams.height = vertical ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
@@ -657,8 +653,7 @@ public class FloatingController {
             btnPause.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
             btnPause.setImageDrawable(new PauseIconDrawable(service.isPaused()));
         }
-        // Screenshot stays available when idle; on 14+ it goes through the accessibility service
-        // and needs no capture session at all
+        // On 14+ the shot goes through accessibility and needs no capture session
         if (btnScreenshot != null) btnScreenshot.setVisibility(View.VISIBLE);
         if (btnGear != null) {
             btnGear.setVisibility(settings.isBubbleGearEnabled() ? View.VISIBLE : View.GONE);

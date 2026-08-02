@@ -18,8 +18,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
-// Sits between the VirtualDisplay and the encoder so the framing is ours. The system's mirror
-// letterboxes a rotated screen down to a fifth of the frame; this rotates it to fill instead.
+// Composites the mirror into the encoder surface so the framing is ours, not the system's
 class CaptureRenderer {
     private static final String TAG = "RecorderX_Renderer";
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
@@ -303,8 +302,7 @@ class CaptureRenderer {
         }
     }
 
-    // Only Auto turns the picture to fill the frame. A locked orientation keeps everything upright
-    // and simply fits it, which is what that setting is for
+    // Only Auto turns the picture; a locked orientation stays upright and is simply fitted
     private void computeMvp() {
         float upright = Math.min((float) outputWidth / sourceWidth, (float) outputHeight / sourceHeight);
         float turned = Math.min((float) outputWidth / sourceHeight, (float) outputHeight / sourceWidth);

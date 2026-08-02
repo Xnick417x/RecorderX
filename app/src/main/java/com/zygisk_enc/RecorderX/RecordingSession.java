@@ -219,8 +219,7 @@ public class RecordingSession {
             };
             mediaProjection.registerCallback(projectionCallback, new Handler(Looper.getMainLooper()));
 
-            // Mirror at the display's own size and let the renderer fit it, rather than letting the
-            // system squeeze a rotated screen into a frame it does not match
+            // Mirror at the display's own size and let the renderer do the fitting
             sourceWidth = Math.max(metrics.widthPixels, 1);
             sourceHeight = Math.max(metrics.heightPixels, 1);
             renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
@@ -250,8 +249,7 @@ public class RecordingSession {
         try {
             videoEncoder = MediaCodec.createEncoderByType(mime);
 
-            // A CPU encoder cannot sustain screen capture. AV1 has no hardware encoder on most
-            // devices, so createEncoderByType silently hands back libaom and the capture crawls
+            // Most devices have no hardware AV1 encoder, so this quietly returns libaom
             if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
                 Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
                 throw new IllegalStateException("no hardware encoder for " + mime);
@@ -260,8 +258,7 @@ public class RecordingSession {
             MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
             MediaCodecInfo.VideoCapabilities videoCaps = caps != null ? caps.getVideoCapabilities() : null;
             if (videoCaps != null) {
-                // Assuming 16 forced a needless 0.99 rescale of the native size, which aliases into
-                // visible scanlines. Ask the encoder what it actually needs instead
+                // Assuming 16 forced a rescale of the native size that aliased into scanlines
                 width = alignDown(width, videoCaps.getWidthAlignment());
                 height = alignDown(height, videoCaps.getHeightAlignment());
                 Log.i(TAG, "Encoder " + videoEncoder.getCodecInfo().getName()

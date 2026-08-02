@@ -703,13 +703,9 @@ public class FloatingController {
             PixelFormat.TRANSLUCENT
         );
 
-        if (isDismissOnLeftEdge()) {
-            dismissParams.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
-            dismissParams.x = dpToPx(24);
-        } else {
-            dismissParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-            dismissParams.y = dpToPx(96);
-        }
+        // Bottom centre tracks rotation on its own, since overlay coordinates turn with the display
+        dismissParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        dismissParams.y = dismissOffset();
 
         ImageView target = new ImageView(context);
         target.setImageDrawable(new DismissTargetDrawable());
@@ -727,27 +723,17 @@ public class FloatingController {
         dismissTargetView = null;
     }
 
-    // Placement follows the chosen recording orientation, not the live device rotation
-    private boolean isDismissOnLeftEdge() {
-        int orientPref = settings.getOrientation();
-        if (orientPref == 1) return false;
-        if (orientPref == 2) return true;
-        return context.getResources().getConfiguration().orientation
-                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+
+    // Hold the target at the same fraction of the screen either way, clear of the very bottom edge
+    private int dismissOffset() {
+        return Math.max(dpToPx(24), (int) (getScreenSize().y * 0.11f) - dismissSize / 2);
     }
 
     private boolean isOverDismissTarget(float rawX, float rawY) {
         if (dismissTargetView == null) return false;
         Point screen = getScreenSize();
-        float cx;
-        float cy;
-        if (isDismissOnLeftEdge()) {
-            cx = dpToPx(24) + dismissSize / 2f;
-            cy = screen.y / 2f;
-        } else {
-            cx = screen.x / 2f;
-            cy = screen.y - dpToPx(96) - dismissSize / 2f;
-        }
+        float cx = screen.x / 2f;
+        float cy = screen.y - dismissOffset() - dismissSize / 2f;
         return Math.hypot(rawX - cx, rawY - cy) < dismissSize;
     }
 

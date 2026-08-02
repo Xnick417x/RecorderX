@@ -51,6 +51,7 @@
         <item>H.264</item>
         <item>H.265</item>
         <item>AV1</item>
+        <item>AV1 (SOFTWARE)</item>
     </string-array>
 
     <string-array name="bitrate_mode_options">

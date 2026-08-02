@@ -48,6 +48,8 @@ public class MainActivity extends AppCompatActivity {
         android.graphics.Color.parseColor("#F43F5E")  // 11: Rose Pink
     };
 
+    private static final int DEFAULT_ACCENT_INDEX = 6; // Cyan/Teal
+
     private final RecorderService.RecordingStateListener recordingStateListener = new RecorderService.RecordingStateListener() {
         @Override
         public void onStateChanged(boolean isRecording) {
@@ -304,7 +306,7 @@ public class MainActivity extends AppCompatActivity {
                             float threshold = 8 * density; // Super sensitive 8dp threshold for quick little swipes!
                             
                             if (Math.abs(deltaX) > threshold) {
-                                int currentIdx = themePrefs.getInt("accent_color_index", 1);
+                                int currentIdx = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
                                 int newIdx;
                                 if (deltaX > 0) {
                                     // Swipe Right -> Next Color
@@ -327,12 +329,27 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Apply saved accent color on startup (default to Yellow: index 1)
-        int savedColorIndex = themePrefs.getInt("accent_color_index", 1);
+        int savedColorIndex = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
         applyAccentColor(ACCENT_COLORS[savedColorIndex]);
 
         // Video Settings
-        setupSlider(R.id.codecSlider, R.array.codec_options, settingsManager.getCodec(), 
-            index -> settingsManager.setCodec(index));
+        Slider codecSlider = findViewById(R.id.codecSlider);
+        String[] codecOptions = getResources().getStringArray(R.array.codec_options);
+        codecSlider.setValue(settingsManager.getCodec());
+        codecSlider.setLabelFormatter(value -> {
+            int idx = (int) value;
+            return (idx >= 0 && idx < codecOptions.length) ? codecOptions[idx] : String.valueOf(value);
+        });
+        codecSlider.addOnChangeListener((sl, value, fromUser) -> {
+            if (!fromUser) return;
+            int selected = (int) value;
+            if (selected == 3 && !getSharedPreferences("ui_prefs", MODE_PRIVATE).getBoolean("av1_sw_warned", false)) {
+                sl.setValue(settingsManager.getCodec());
+                showSoftwareAv1Warning(codecSlider);
+                return;
+            }
+            settingsManager.setCodec(selected);
+        });
         // Orientation slider — with first-time AUTO mode warning
         Slider orientationSlider = findViewById(R.id.orientationSlider);
         String[] orientOptions = getResources().getStringArray(R.array.orientation_options);
@@ -346,7 +363,7 @@ public class MainActivity extends AppCompatActivity {
             int selected = (int) value;
             if (selected == 0) {
                 android.content.SharedPreferences warnPrefs = getSharedPreferences("ui_prefs", MODE_PRIVATE);
-                boolean warned = warnPrefs.getBoolean("auto_orient_warned", false);
+                boolean warned = warnPrefs.getBoolean("auto_orient_warned_v2", false);
                 if (!warned && !isWarningDialogShowing) {
                     isWarningDialogShowing = true;
                     // Use plain Dialog — no AlertDialog internal handler conflicts, single clean tap guaranteed
@@ -367,7 +384,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.setBackground(bg);
 
                     android.widget.TextView tvTitle = new android.widget.TextView(this);
-                    tvTitle.setText("⚠  Auto Orientation Warning");
+                    tvTitle.setText("Auto Orientation");
                     tvTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
                     tvTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
                     tvTitle.setTextColor(getActiveAccentColor());
@@ -378,7 +395,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.addView(tvTitle, titleParams);
 
                     android.widget.TextView tvMsg = new android.widget.TextView(this);
-                    tvMsg.setText("Auto Orientation is a gimmick and will degrade your recording quality.\n\nAndroid dynamically rotates the virtual display mid-recording, often causing resolution mismatches, black bars, and encoder instability.\n\nWe strongly recommend manually selecting Portrait or Landscape to match the primary orientation of the app you intend to record — this produces the best, most consistent output.");
+                    tvMsg.setText("Auto follows your phone as you turn it. The video keeps the shape it had when recording started, so when you rotate, the picture is turned a quarter turn to fill that frame instead of shrinking into a letterbox.\n\nThat means a landscape app still uses the whole frame at full detail, but it plays back on its side unless you turn your player to match.\n\nPortrait and Landscape keep the picture the right way up instead, fitting it into the frame you chose and adding bars when the screen does not match it.\n\nPick Auto if you rotate mid-recording and want every pixel used. Pick a fixed orientation if you want playback upright without turning anything.");
                     tvMsg.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
                     tvMsg.setTextColor(getResources().getColor(R.color.text_primary, getTheme()));
                     android.widget.LinearLayout.LayoutParams msgParams = new android.widget.LinearLayout.LayoutParams(
@@ -388,8 +405,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.addView(tvMsg, msgParams);
 
                     android.widget.Button btnOk = new android.widget.Button(this);
-                    btnOk.setText("I Understand (5)");
-                    btnOk.setEnabled(false);
+                    btnOk.setText("I Understand");
                     android.graphics.drawable.GradientDrawable btnBg = new android.graphics.drawable.GradientDrawable();
                     btnBg.setColor(getActiveAccentColor());
                     btnBg.setCornerRadius(4 * getResources().getDisplayMetrics().density);
@@ -399,7 +415,7 @@ public class MainActivity extends AppCompatActivity {
                     // Single clean listener — plain Dialog has no internal handler, one tap = one call
                     btnOk.setOnClickListener(v -> {
                         isWarningDialogShowing = false;
-                        warnPrefs.edit().putBoolean("auto_orient_warned", true).apply();
+                        warnPrefs.edit().putBoolean("auto_orient_warned_v2", true).apply();
                         settingsManager.setOrientation(0);
                         orientationSlider.setValue(0);
                         warningDialog.dismiss();
@@ -442,17 +458,6 @@ public class MainActivity extends AppCompatActivity {
                         warningDialog.getWindow().setAttributes(lp);
                     }
                     warningDialog.show();
-
-                    // Timer only updates text and re-enables — never touches click listener
-                    new android.os.CountDownTimer(5000, 1000) {
-                        @Override public void onTick(long ms) {
-                            btnOk.setText("I Understand (" + (ms / 1000 + 1) + ")");
-                        }
-                        @Override public void onFinish() {
-                            btnOk.setText("I Understand");
-                            btnOk.setEnabled(true);
-                        }
-                    }.start();
 
                     // Revert slider visually until user explicitly confirms
                     sl.setValue(settingsManager.getOrientation());
@@ -497,11 +502,18 @@ public class MainActivity extends AppCompatActivity {
                         .show();
                 } else {
                     settingsManager.setFloatingControlEnabled(true);
+                    setBubbleVisible(true);
                 }
             } else {
                 settingsManager.setFloatingControlEnabled(false);
+                setBubbleVisible(false);
             }
         });
+
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        switchGear.setChecked(settingsManager.isBubbleGearEnabled());
+        switchGear.setOnCheckedChangeListener((buttonView, isChecked) ->
+                settingsManager.setBubbleGearEnabled(isChecked));
 
         // Output Settings
         TextInputEditText namingInput = findViewById(R.id.namingTemplateEditText);
@@ -516,6 +528,101 @@ public class MainActivity extends AppCompatActivity {
 
         // Clickable copy helper for {timestamp}
         setupNamingTemplateHelper();
+    }
+
+    private void showSoftwareAv1Warning(Slider codecSlider) {
+        if (isWarningDialogShowing) return;
+        isWarningDialogShowing = true;
+
+        android.app.Dialog dialog = new android.app.Dialog(this);
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        dialog.setCancelable(false);
+        dialog.setCanceledOnTouchOutside(false);
+
+        float density = getResources().getDisplayMetrics().density;
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = (int) (24 * density);
+        layout.setPadding(pad, pad, pad, pad);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(getResources().getColor(R.color.bg_main, getTheme()));
+        bg.setCornerRadius(12 * density);
+        bg.setStroke((int) (2 * density), getActiveAccentColor());
+        layout.setBackground(bg);
+
+        android.widget.TextView tvTitle = new android.widget.TextView(this);
+        tvTitle.setText("AV1 (Software)");
+        tvTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
+        tvTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(getActiveAccentColor());
+        android.widget.LinearLayout.LayoutParams titleParams = new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleParams.bottomMargin = (int) (12 * density);
+        layout.addView(tvTitle, titleParams);
+
+        android.widget.TextView tvMsg = new android.widget.TextView(this);
+        tvMsg.setText("Your phone has no hardware AV1 encoder, so this records on the processor instead."
+                + "\n\nAnything above FHD is brought down to it, and the frame rate is capped at 30."
+                + " Your resolution choice is otherwise kept, so pick HD or 480 if you want it to"
+                + " hold that rate. At FHD the processor will not keep up and the finished file will"
+                + " show a lower frame rate than you asked for."
+                + "\n\nThe phone will feel slower while recording. The payoff is a much smaller file."
+                + " For full resolution or a higher frame rate, pick H.264 or H.265 instead.");
+        tvMsg.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
+        tvMsg.setTextColor(getResources().getColor(R.color.text_primary, getTheme()));
+        android.widget.LinearLayout.LayoutParams msgParams = new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+        msgParams.bottomMargin = (int) (20 * density);
+        layout.addView(tvMsg, msgParams);
+
+        android.widget.Button btnOk = new android.widget.Button(this);
+        btnOk.setText("Use AV1 (Software)");
+        android.graphics.drawable.GradientDrawable btnBg = new android.graphics.drawable.GradientDrawable();
+        btnBg.setColor(getActiveAccentColor());
+        btnBg.setCornerRadius(4 * density);
+        btnOk.setBackground(btnBg);
+        btnOk.setTextColor(android.graphics.Color.BLACK);
+        btnOk.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        btnOk.setOnClickListener(v -> {
+            isWarningDialogShowing = false;
+            getSharedPreferences("ui_prefs", MODE_PRIVATE).edit().putBoolean("av1_sw_warned", true).apply();
+            settingsManager.setCodec(3);
+            codecSlider.setValue(3);
+            dialog.dismiss();
+        });
+        layout.addView(btnOk, new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, (int) (48 * density)));
+
+        android.widget.Button btnCancel = new android.widget.Button(this);
+        btnCancel.setText("Cancel");
+        btnCancel.setBackground(null);
+        btnCancel.setTextColor(getResources().getColor(R.color.text_primary, getTheme()));
+        btnCancel.setOnClickListener(v -> {
+            isWarningDialogShowing = false;
+            codecSlider.setValue(settingsManager.getCodec());
+            dialog.dismiss();
+        });
+        layout.addView(btnCancel, new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, (int) (44 * density)));
+
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        int margin = (int) (24 * density);
+        container.setPadding(margin, margin, margin, margin);
+        container.addView(layout);
+        dialog.setContentView(container);
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(
+                    new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
+            android.view.WindowManager.LayoutParams lp = new android.view.WindowManager.LayoutParams();
+            lp.copyFrom(dialog.getWindow().getAttributes());
+            lp.width = android.view.WindowManager.LayoutParams.MATCH_PARENT;
+            dialog.getWindow().setAttributes(lp);
+        }
+        dialog.setOnDismissListener(d -> isWarningDialogShowing = false);
+        dialog.show();
     }
 
     private void setupSlider(int viewId, int arrayId, int initialSelection, OnSelectionChanged listener) {
@@ -635,6 +742,20 @@ public class MainActivity extends AppCompatActivity {
         btnRecord.setText(R.string.start_recording);
     }
 
+    private void setBubbleVisible(boolean visible) {
+        Intent intent = new Intent(this, RecorderService.class);
+        intent.setAction(visible ? RecorderService.ACTION_SHOW_BUBBLE : RecorderService.ACTION_HIDE_BUBBLE);
+        try {
+            if (visible) {
+                ContextCompat.startForegroundService(this, intent);
+            } else {
+                startService(intent);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("RecorderX_Main", "Bubble toggle failed", e);
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -657,6 +778,12 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         
+        // Opening the app brings the bubble back if it was dragged onto the dismiss target
+        if (settingsManager.isFloatingControlEnabled()
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this))) {
+            setBubbleVisible(true);
+        }
+
         if (getIntent() != null && getIntent().getBooleanExtra("AUTO_START", false)) {
             getIntent().removeExtra("AUTO_START");
             if (!RecorderService.isRecording()) {
@@ -712,6 +839,10 @@ public class MainActivity extends AppCompatActivity {
         if (switchFloating != null) {
             switchFloating.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
         }
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        if (switchGear != null) {
+            switchGear.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
+        }
         
         // 6. TextInputLayout
         com.google.android.material.textfield.TextInputLayout layoutTemplate = findViewById(R.id.namingTemplateLayout);
@@ -726,9 +857,9 @@ public class MainActivity extends AppCompatActivity {
 
     private int getActiveAccentColor() {
         android.content.SharedPreferences themePrefs = getSharedPreferences("theme_prefs", MODE_PRIVATE);
-        int index = themePrefs.getInt("accent_color_index", 1); // Default to Yellow (index 1)
+        int index = themePrefs.getInt("accent_color_index", DEFAULT_ACCENT_INDEX);
         if (index < 0 || index >= ACCENT_COLORS.length) {
-            index = 1;
+            index = DEFAULT_ACCENT_INDEX;
         }
         return ACCENT_COLORS[index];
     }

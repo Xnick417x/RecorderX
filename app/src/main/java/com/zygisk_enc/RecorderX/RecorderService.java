@@ -26,12 +26,15 @@ public class RecorderService extends Service {
     private static final int SAVED_NOTIFICATION_ID = 2;
     private static final String CHANNEL_ID = "recorder_channel";
     private static final String SAVED_CHANNEL_ID = "saved_channel";
+    private static final String IDLE_CHANNEL_ID = "bubble_channel_v2";
 
     public static final String ACTION_START = "ACTION_START";
     public static final String ACTION_STOP = "ACTION_STOP";
     public static final String ACTION_PAUSE = "ACTION_PAUSE";
     public static final String ACTION_RESUME = "ACTION_RESUME";
     public static final String ACTION_DELETE = "ACTION_DELETE";
+    public static final String ACTION_SHOW_BUBBLE = "ACTION_SHOW_BUBBLE";
+    public static final String ACTION_HIDE_BUBBLE = "ACTION_HIDE_BUBBLE";
     public static final String EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE";
     public static final String EXTRA_DATA = "EXTRA_DATA";
 
@@ -111,6 +114,10 @@ public class RecorderService extends Service {
             pauseRecording();
         } else if (ACTION_RESUME.equals(action)) {
             resumeRecording();
+        } else if (ACTION_SHOW_BUBBLE.equals(action)) {
+            showBubble();
+        } else if (ACTION_HIDE_BUBBLE.equals(action)) {
+            hideBubble();
         } else if (ACTION_DELETE.equals(action)) {
             String deleteUriStr = intent.getStringExtra("delete_uri");
             String deletePath = intent.getStringExtra("delete_path");
@@ -126,7 +133,13 @@ public class RecorderService extends Service {
 
     private void startRecording(Intent intent) {
         if (isRecording) return;
-        
+
+        if (recordingSession != null) {
+            Log.w(TAG, "Releasing a leftover session before starting a new one");
+            recordingSession.stop();
+            recordingSession = null;
+        }
+
         int currentResultCode = intent != null ? intent.getIntExtra(EXTRA_RESULT_CODE, resultCode) : resultCode;
         Intent currentData = intent != null ? intent.getParcelableExtra(EXTRA_DATA) : null;
         if (currentData == null) currentData = projectionData;
@@ -152,43 +165,158 @@ public class RecorderService extends Service {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
                         Log.w(TAG, "Cannot show floating control: overlay permission not granted");
                     } else {
-                        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                        if (floatingController == null) {
                             floatingController = new FloatingController(this);
-                            floatingController.show();
-                        });
+                        }
+                        floatingController.show();
+                        floatingController.onRecordingStateChanged(true);
                     }
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error in startRecording", e);
-                stopForeground(true);
-                stopSelf();
+                if (recordingSession != null) {
+                    recordingSession.stop();
+                    recordingSession = null;
+                }
+                isRecording = false;
+                notifyStateChanged();
+                fallBackToIdleOrStop();
             }
+        } else {
+            Log.e(TAG, "MediaProjection unavailable, aborting");
+            fallBackToIdleOrStop();
         }
     }
 
+    // A failed capture should not take the bubble down with it
+    private void fallBackToIdleOrStop() {
+        if (floatingController != null && new SettingsManager(this).isFloatingControlEnabled()) {
+            floatingController.onRecordingStateChanged(false);
+            enterIdleForeground();
+            return;
+        }
+        stopForeground(true);
+        stopSelf();
+    }
+
     private void stopRecording() {
-        if (!isRecording) return;
-        Log.i(TAG, "Stopping recording service...");
+        if (!isRecording && recordingSession == null && floatingController == null) return;
+        Log.i(TAG, "Stopping recording...");
+
+        if (recordingSession != null) {
+            String lastPath = recordingSession.getOutputFilePath();
+            Uri lastUri = recordingSession.getOutputUri();
+            recordingSession.stop();
+            recordingSession = null;
+
+            if (lastPath != null || lastUri != null) {
+                showSavedNotification(lastPath, lastUri);
+            }
+        }
+
+        isRecording = false;
+        notifyStateChanged();
+
+        // The bubble outlives a recording, so drop back to the idle foreground instead of stopping
+        if (floatingController != null && new SettingsManager(this).isFloatingControlEnabled()) {
+            floatingController.onRecordingStateChanged(false);
+            enterIdleForeground();
+            return;
+        }
 
         if (floatingController != null) {
             floatingController.dismiss();
             floatingController = null;
         }
-        
-        if (recordingSession != null) {
-            String lastPath = recordingSession.getOutputFilePath();
-            Uri lastUri = recordingSession.getOutputUri();
-            recordingSession.stop();
-            
-            if (lastPath != null || lastUri != null) {
-                showSavedNotification(lastPath, lastUri);
-            }
-        }
-        
-        isRecording = false;
-        notifyStateChanged();
         stopForeground(true);
         stopSelf();
+    }
+
+    private void showBubble() {
+        SettingsManager settings = new SettingsManager(this);
+        if (!settings.isFloatingControlEnabled()) {
+            if (!isRecording) stopSelf();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Cannot show floating control: overlay permission not granted");
+            if (!isRecording) stopSelf();
+            return;
+        }
+
+        if (!isRecording) enterIdleForeground();
+
+        if (floatingController == null) {
+            floatingController = new FloatingController(this);
+        }
+        floatingController.show();
+        floatingController.onRecordingStateChanged(isRecording);
+    }
+
+    private void hideBubble() {
+        if (floatingController != null) {
+            floatingController.dismiss();
+            floatingController = null;
+        }
+        if (!isRecording) {
+            stopForeground(true);
+            stopSelf();
+        }
+    }
+
+    private void enterIdleForeground() {
+        createNotificationChannels();
+        Notification notification = createIdleNotification();
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not enter idle foreground state", e);
+        }
+    }
+
+    private Notification createIdleNotification() {
+        Intent hideIntent = new Intent(this, RecorderService.class);
+        hideIntent.setAction(ACTION_HIDE_BUBBLE);
+        PendingIntent hidePendingIntent = PendingIntent.getService(
+            this, 3, hideIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent openPendingIntent = PendingIntent.getActivity(
+            this, 4, openIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        return new Notification.Builder(this, IDLE_CHANNEL_ID)
+            .setContentTitle("RecorderX controls ready")
+            .setSmallIcon(R.drawable.ic_record)
+            .setOngoing(true)
+            .setPriority(Notification.PRIORITY_MIN)
+            .setVisibility(Notification.VISIBILITY_SECRET)
+            .setContentIntent(openPendingIntent)
+            .addAction(new Notification.Action.Builder(
+                createTextIcon("HIDE"), "Hide Bubble", hidePendingIntent
+            ).build())
+            .build();
+    }
+
+    // Own task plus no animation, so the consent prompt appears without pulling MainActivity forward
+    public void requestStartRecording() {
+        Intent intent = new Intent(this, RequestCaptureActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        startActivity(intent);
+    }
+
+    public void openMainApp() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(intent);
+    }
+
+    public void dismissBubble() {
+        hideBubble();
     }
 
     public boolean isPaused() {
@@ -227,6 +355,11 @@ public class RecorderService extends Service {
             if (recordingSession != null) {
                 recordingSession.takeScreenshot(onCompleted);
             } else {
+                // Below 14 the shot is taken off the capture session, so there has to be one
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        android.widget.Toast.makeText(this,
+                                "Screenshots need a recording on this Android version",
+                                android.widget.Toast.LENGTH_SHORT).show());
                 if (onCompleted != null) onCompleted.run();
             }
         }
@@ -382,6 +515,15 @@ public class RecorderService extends Service {
             
             NotificationChannel savedChannel = new NotificationChannel(SAVED_CHANNEL_ID, "Recording Saved", NotificationManager.IMPORTANCE_HIGH);
             manager.createNotificationChannel(savedChannel);
+
+            // MIN keeps it out of the status bar; the id is versioned as channel settings freeze
+            manager.deleteNotificationChannel("bubble_channel");
+            NotificationChannel idleChannel = new NotificationChannel(IDLE_CHANNEL_ID, "Floating Controls", NotificationManager.IMPORTANCE_MIN);
+            idleChannel.setShowBadge(false);
+            idleChannel.setSound(null, null);
+            idleChannel.enableVibration(false);
+            idleChannel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+            manager.createNotificationChannel(idleChannel);
         }
     }
 
@@ -455,6 +597,34 @@ public class RecorderService extends Service {
         canvas.drawText(text, width / 2f, y, paint);
         
         return android.graphics.drawable.Icon.createWithBitmap(bitmap);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (recordingSession != null) {
+            recordingSession.onConfigurationChanged();
+        }
+        if (floatingController != null) {
+            floatingController.onConfigurationChanged();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        if (floatingController != null) {
+            floatingController.dismiss();
+            floatingController = null;
+        }
+        if (recordingSession != null) {
+            recordingSession.stop();
+            recordingSession = null;
+        }
+        if (isRecording) {
+            isRecording = false;
+            notifyStateChanged();
+        }
+        super.onDestroy();
     }
 
     @Nullable

@@ -53,6 +53,12 @@ public class SettingsManager {
     public void setFloatingControlEnabled(boolean enabled) { prefs.edit().putBoolean("floating_control", enabled).apply(); }
     public boolean isFloatingControlEnabled() { return prefs.getBoolean("floating_control", false); }
 
+    public void setBubbleMenuVertical(boolean vertical) { prefs.edit().putBoolean("bubble_menu_vertical", vertical).apply(); }
+    public boolean isBubbleMenuVertical() { return prefs.getBoolean("bubble_menu_vertical", true); }
+
+    public void setBubbleGearEnabled(boolean enabled) { prefs.edit().putBoolean("bubble_gear", enabled).apply(); }
+    public boolean isBubbleGearEnabled() { return prefs.getBoolean("bubble_gear", true); }
+
     public void setNamingTemplate(String template) { prefs.edit().putString(KEY_NAMING_TEMPLATE, template).apply(); }
     
     public String getRawNamingTemplate() {
@@ -68,53 +74,45 @@ public class SettingsManager {
     }
 
     public int getResolutionWidth() {
-        DisplayMetrics dm = getMetrics();
-        int orientPref = getOrientation();
-        boolean isLandscape;
-        if (orientPref == 1) isLandscape = false;
-        else if (orientPref == 2) isLandscape = true;
-        else isLandscape = context.getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
-        
-        int shortSide = Math.min(dm.widthPixels, dm.heightPixels);
-        int longSide = Math.max(dm.widthPixels, dm.heightPixels);
-        
-        int width;
-        switch (getResolution()) {
-            case 1: width = isLandscape ? 3840 : 2160; break; // 4K
-            case 2: width = isLandscape ? 2560 : 1440; break; // 2K
-            case 3: width = isLandscape ? 1920 : 1080; break; // 1080p
-            case 4: width = isLandscape ? 1280 : 720; break;  // 720p
-            case 5: width = isLandscape ? 854 : 480; break;   // 480p
-            default: width = isLandscape ? longSide : shortSide; break;
-        }
-        return makeMultipleOf16(width);
+        return isLandscapeCapture() ? makeEven(longEdge()) : makeEven(shortEdge());
     }
 
     public int getResolutionHeight() {
-        DisplayMetrics dm = getMetrics();
-        int orientPref = getOrientation();
-        boolean isLandscape;
-        if (orientPref == 1) isLandscape = false;
-        else if (orientPref == 2) isLandscape = true;
-        else isLandscape = context.getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
-
-        int shortSide = Math.min(dm.widthPixels, dm.heightPixels);
-        int longSide = Math.max(dm.widthPixels, dm.heightPixels);
-
-        int height;
-        switch (getResolution()) {
-            case 1: height = isLandscape ? 2160 : 3840; break; // 4K
-            case 2: height = isLandscape ? 1440 : 2560; break; // 2K
-            case 3: height = isLandscape ? 1080 : 1920; break; // 1080p
-            case 4: height = isLandscape ? 720 : 1280; break;  // 720p
-            case 5: height = isLandscape ? 480 : 854; break;   // 480p
-            default: height = isLandscape ? shortSide : longSide; break;
-        }
-        return makeMultipleOf16(height);
+        return isLandscapeCapture() ? makeEven(shortEdge()) : makeEven(longEdge());
     }
 
-    private int makeMultipleOf16(int value) {
-        return (value / 16) * 16;
+    private boolean isLandscapeCapture() {
+        int orientPref = getOrientation();
+        if (orientPref == 1) return false;
+        if (orientPref == 2) return true;
+        return context.getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    // The preset names a short edge only; the long edge follows the screen so nothing is letterboxed
+    private int shortEdge() {
+        DisplayMetrics dm = getMetrics();
+        int screenShort = Math.min(dm.widthPixels, dm.heightPixels);
+        switch (getResolution()) {
+            case 1: return Math.min(2160, screenShort);
+            case 2: return Math.min(1440, screenShort);
+            case 3: return Math.min(1080, screenShort);
+            case 4: return Math.min(720, screenShort);
+            case 5: return Math.min(480, screenShort);
+            default: return screenShort;
+        }
+    }
+
+    private int longEdge() {
+        DisplayMetrics dm = getMetrics();
+        int screenShort = Math.max(1, Math.min(dm.widthPixels, dm.heightPixels));
+        int screenLong = Math.max(dm.widthPixels, dm.heightPixels);
+        return Math.round(shortEdge() * (float) screenLong / screenShort);
+    }
+
+    // Only chroma subsampling needs even dimensions here; the encoder's own alignment is applied later
+    private int makeEven(int value) {
+        return value & ~1;
     }
 
     private DisplayMetrics getMetrics() {
@@ -141,8 +139,11 @@ public class SettingsManager {
     public String getVideoMimeType() {
         switch (getCodec()) {
             case 1: return MediaFormat.MIMETYPE_VIDEO_HEVC;
-            case 2: return MediaFormat.MIMETYPE_VIDEO_AV1;
+            case 2:
+            case 3: return MediaFormat.MIMETYPE_VIDEO_AV1;
             default: return MediaFormat.MIMETYPE_VIDEO_AVC;
         }
     }
+
+    public boolean isSoftwareCodecAllowed() { return getCodec() == 3; }
 }

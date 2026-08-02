@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecordingSession {
     private static final String TAG = "RecorderX_Session";
+    private static final int SOFTWARE_SHORT_EDGE = 1080;
+    private static final int SOFTWARE_FPS = 30;
     
     private final Context context;
     private final MediaProjection mediaProjection;
@@ -61,6 +63,7 @@ public class RecordingSession {
     private boolean muxerStarted = false;
     private final AtomicBoolean isRecording = new AtomicBoolean(false);
     private final AtomicBoolean isPaused = new AtomicBoolean(false);
+    private final AtomicBoolean released = new AtomicBoolean(false);
     private long pauseStartTimeUs = -1;
     private long totalPauseDurationUs = 0;
     
@@ -78,6 +81,12 @@ public class RecordingSession {
     
     private int activeWidth;
     private int activeHeight;
+    private String activeMime;
+    private CaptureRenderer renderer;
+    private int sourceWidth;
+    private int sourceHeight;
+    private int sourceRotation = -1;
+    private DisplayManager.DisplayListener displayListener;
     private MediaProjection.Callback projectionCallback;
     
     private volatile int videoFrameCount = 0;
@@ -171,7 +180,8 @@ public class RecordingSession {
             }
 
             setupVideoEncoder();
-            
+            warnIfCodecChanged(settings.getVideoMimeType());
+
             if (settings.getAudioSource() != 0) {
                 try {
                     setupAudioEncoder();
@@ -199,6 +209,10 @@ public class RecordingSession {
             projectionCallback = new MediaProjection.Callback() {
                 @Override
                 public void onStop() {
+                    if (released.get()) {
+                        Log.i(TAG, "Ignoring onStop() for an already-released session");
+                        return;
+                    }
                     Log.i(TAG, "MediaProjection onStop() triggered by system");
                     if (listener != null) {
                         listener.onSystemStop();
@@ -209,13 +223,21 @@ public class RecordingSession {
             };
             mediaProjection.registerCallback(projectionCallback, new Handler(Looper.getMainLooper()));
 
-            Log.d(TAG, "Creating VirtualDisplay (" + activeWidth + "x" + activeHeight + ")...");
+            // Mirror at the display's own size and let the renderer do the fitting
+            sourceWidth = Math.max(metrics.widthPixels, 1);
+            sourceHeight = Math.max(metrics.heightPixels, 1);
+            sourceRotation = wm != null ? wm.getDefaultDisplay().getRotation() : Surface.ROTATION_0;
+            renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
+                    sourceWidth, sourceHeight, settings.getOrientation() == 0, sourceRotation,
+                    settings.getFpsValue());
+            registerDisplayListener();
+
+            Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
+                    + " -> " + activeWidth + "x" + activeHeight + ")...");
             virtualDisplay = mediaProjection.createVirtualDisplay("RecorderX",
-                    activeWidth, activeHeight, density,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR | 
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | 
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION,
-                    inputSurface, null, null);
+                    sourceWidth, sourceHeight, density,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    renderer.getInputSurface(), null, null);
             
             if (virtualDisplay == null) {
                 throw new IOException("Failed to create virtual display");
@@ -230,8 +252,27 @@ public class RecordingSession {
         }
     }
 
-    private boolean tryConfigureVideoEncoder(String mime, int width, int height, int fps, int bitrate, int bitrateMode, boolean useHighProfile) {
+    private boolean tryConfigureVideoEncoder(String mime, int width, int height, int fps, int bitrate, int bitrateMode, boolean useHighProfile, boolean requireHardware) {
         try {
+            videoEncoder = pickEncoder(mime, requireHardware);
+
+            MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
+            MediaCodecInfo.VideoCapabilities videoCaps = caps != null ? caps.getVideoCapabilities() : null;
+            if (videoCaps != null) {
+                // Assuming 16 forced a rescale of the native size that aliased into scanlines
+                width = alignDown(width, videoCaps.getWidthAlignment());
+                height = alignDown(height, videoCaps.getHeightAlignment());
+                Log.i(TAG, "Encoder " + videoEncoder.getCodecInfo().getName()
+                        + " alignment " + videoCaps.getWidthAlignment() + "x" + videoCaps.getHeightAlignment()
+                        + " -> capture size " + width + "x" + height);
+
+                if (!videoCaps.getBitrateRange().contains(bitrate)) {
+                    int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
+                    Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
+                    bitrate = clampedBitrate;
+                }
+            }
+
             MediaFormat format = MediaFormat.createVideoFormat(mime, width, height);
             format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
             format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
@@ -247,33 +288,16 @@ public class RecordingSession {
                 format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
             }
 
-            videoEncoder = MediaCodec.createEncoderByType(mime);
-            
-            // Proactive hardware capabilities check to prevent silent encoder failures
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
-                if (caps != null) {
-                    MediaCodecInfo.VideoCapabilities videoCaps = caps.getVideoCapabilities();
-                    if (videoCaps != null) {
-                        if (!videoCaps.getBitrateRange().contains(bitrate)) {
-                            int clampedBitrate = Math.max(videoCaps.getBitrateRange().getLower(), Math.min(bitrate, videoCaps.getBitrateRange().getUpper()));
-                            Log.w(TAG, "Bitrate " + bitrate + " not supported. Clamping to " + clampedBitrate);
-                            bitrate = clampedBitrate;
-                            format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
-                        }
-                    }
-                }
-            }
-
             videoEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             inputSurface = videoEncoder.createInputSurface();
             
             this.activeWidth = width;
             this.activeHeight = height;
-            
+            this.activeMime = mime;
+
             return true;
         } catch (Exception e) {
-            Log.w(TAG, "Encoder fallback: Rejected " + width + "x" + height + "@" + fps + "fps (" + mime + ")");
+            Log.w(TAG, "Encoder fallback: Rejected " + width + "x" + height + "@" + fps + "fps (" + mime + "): " + e);
             if (videoEncoder != null) {
                 try { videoEncoder.release(); } catch (Exception ignored) {}
                 videoEncoder = null;
@@ -282,12 +306,89 @@ public class RecordingSession {
         }
     }
 
+    // createEncoderByType takes the first match, not the best, so walk the list and prefer hardware
+    private MediaCodec pickEncoder(String mime, boolean requireHardware) throws IOException {
+        android.media.MediaCodecList list = new android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS);
+        String software = null;
+
+        for (MediaCodecInfo info : list.getCodecInfos()) {
+            if (!info.isEncoder() || info.isAlias()) continue;
+
+            boolean supports = false;
+            for (String type : info.getSupportedTypes()) {
+                if (type.equalsIgnoreCase(mime)) { supports = true; break; }
+            }
+            if (!supports) continue;
+
+            if (info.isHardwareAccelerated() && !info.isSoftwareOnly()) {
+                return MediaCodec.createByCodecName(info.getName());
+            }
+            if (software == null) software = info.getName();
+        }
+
+        if (!requireHardware && software != null) {
+            Log.w(TAG, "Falling back to software encoder " + software + " for " + mime);
+            return MediaCodec.createByCodecName(software);
+        }
+
+        throw new IOException("No hardware encoder for " + mime);
+    }
+
+    // Fallback rungs have to keep the screen's shape too, or a rejection reintroduces the bars
+    private int[] scaleToShortEdge(int width, int height, int shortEdge) {
+        int shortSide = Math.min(width, height);
+        if (shortSide <= shortEdge) return new int[]{width & ~1, height & ~1};
+        float k = (float) shortEdge / shortSide;
+        return new int[]{((int) (width * k)) & ~1, ((int) (height * k)) & ~1};
+    }
+
+    private int alignDown(int value, int alignment) {
+        return alignment <= 1 ? value : (value / alignment) * alignment;
+    }
+
+    private String codecLabel(String mime) {
+        if (MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mime)) return "H.265";
+        if (MediaFormat.MIMETYPE_VIDEO_AV1.equals(mime)) return "AV1";
+        return "H.264";
+    }
+
+    // Falling back silently is what makes the recorded frame rate look like a lie
+    private void warnIfCodecChanged(String requestedMime) {
+        if (activeMime == null || activeMime.equals(requestedMime)) return;
+        final String message = codecLabel(requestedMime) + " has no hardware encoder here, recording in "
+                + codecLabel(activeMime);
+        Log.w(TAG, message);
+        new Handler(Looper.getMainLooper()).post(() ->
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show());
+    }
+
+    // A flat bitrate starves high-resolution captures, so scale a floor from pixels per second
+    private int minimumBitrate(int width, int height, int fps, String mime) {
+        double bitsPerPixel = MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime) ? 0.10 : 0.07;
+        long floor = (long) ((long) width * height * fps * bitsPerPixel);
+        return (int) Math.min(floor, 40000000L);
+    }
+
     private void setupVideoEncoder() throws IOException {
         String originalMime = settings.getVideoMimeType();
         int originalWidth = settings.getResolutionWidth();
         int originalHeight = settings.getResolutionHeight();
         int originalFps = settings.getFpsValue();
-        int originalBitrate = settings.getBitrateValue();
+
+        // A CPU encoder cannot sustain full resolution, so cap it to something it can hold
+        boolean allowSoftware = settings.isSoftwareCodecAllowed();
+        if (allowSoftware) {
+            int shortSide = Math.min(originalWidth, originalHeight);
+            if (shortSide > SOFTWARE_SHORT_EDGE) {
+                float k = (float) SOFTWARE_SHORT_EDGE / shortSide;
+                originalWidth = ((int) (originalWidth * k)) & ~1;
+                originalHeight = ((int) (originalHeight * k)) & ~1;
+            }
+            originalFps = Math.min(originalFps, SOFTWARE_FPS);
+        }
+
+        int originalBitrate = Math.max(settings.getBitrateValue(),
+                minimumBitrate(originalWidth, originalHeight, originalFps, originalMime));
         int originalBitrateMode = settings.getBitrateMode() == 0 ? 
                 MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR : 
                 MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR;
@@ -303,43 +404,46 @@ public class RecordingSession {
             int mode = originalBitrateMode; // Always keep user's VBR/CBR preference
 
             // Step 1: Request with requested/safe settings
-            if (tryConfigureVideoEncoder(mime, originalWidth, originalHeight, originalFps, originalBitrate, mode, isOriginal)) {
+            boolean needHardware = !(allowSoftware && isOriginal);
+
+            if (tryConfigureVideoEncoder(mime, originalWidth, originalHeight, originalFps, originalBitrate, mode, isOriginal, needHardware)) {
                 return;
             }
 
             boolean isLandscape = originalWidth > originalHeight;
 
             // Dimensions for 1080p and 720p
-            int w1080 = isLandscape ? 1920 : 1080;
-            int h1080 = isLandscape ? 1080 : 1920;
-            int w720 = isLandscape ? 1280 : 720;
-            int h720 = isLandscape ? 720 : 1280;
+            int[] r1080 = scaleToShortEdge(originalWidth, originalHeight, 1080);
+            int[] r720 = scaleToShortEdge(originalWidth, originalHeight, 720);
+            int w1080 = r1080[0], h1080 = r1080[1];
+            int w720 = r720[0], h720 = r720[1];
 
             // Step 2: 1080p @ Max 60 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 60), 12000000, mode, false)) {
+            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 60), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 3: 720p @ Max 60 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 60), 12000000, mode, false)) {
+            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 60), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 4: 1080p @ Max 30 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 30), 12000000, mode, false)) {
+            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 30), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 5: 720p @ Max 30 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 30), 12000000, mode, false)) {
+            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 30), 12000000, mode, false, needHardware)) {
                 return;
             }
         }
 
         // Rock Bottom (720p 30fps safe fallback with safeMime)
-        int safeWidth = originalWidth > originalHeight ? 1280 : 720;
-        int safeHeight = originalWidth > originalHeight ? 720 : 1280;
-        if (tryConfigureVideoEncoder(safeMime, safeWidth, safeHeight, 30, 4000000, originalBitrateMode, false)) {
+        int[] safe = scaleToShortEdge(originalWidth, originalHeight, 720);
+        int safeWidth = safe[0], safeHeight = safe[1];
+        // Last resort only: accept a software encoder rather than fail to record at all
+        if (tryConfigureVideoEncoder(safeMime, safeWidth, safeHeight, 30, 4000000, originalBitrateMode, false, false)) {
             return;
         }
 
@@ -490,7 +594,11 @@ public class RecordingSession {
                     }
                 } else if (outputIndex >= 0) {
                     ByteBuffer outputBuffer = encoder.getOutputBuffer(outputIndex);
-                    
+
+                    if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        bufferInfo.size = 0;
+                    }
+
                     if (muxerStarted && bufferInfo.size > 0) {
                         // NORMALIZE PTS: Most hardware encoders use system uptime which causes huge offsets
                         if (isVideo) {
@@ -534,6 +642,8 @@ public class RecordingSession {
         int bufferSize = 4096; 
         ByteBuffer pcmBuffer = ByteBuffer.allocateDirect(bufferSize);
         ByteBuffer secBuffer = ByteBuffer.allocateDirect(bufferSize);
+        byte[] primaryBytes = new byte[bufferSize];
+        byte[] secondaryBytes = new byte[bufferSize];
         
         // Use system time for audio PTS sync if possible, but keep simple for now
         long totalSamples = 0;
@@ -565,12 +675,9 @@ public class RecordingSession {
                 if (read > 0 || readSec > 0) {
                     // Mix audio if both are present
                     if (read > 0 && readSec > 0) {
-                        byte[] primaryBytes = new byte[read];
-                        pcmBuffer.get(primaryBytes);
-                        
-                        byte[] secondaryBytes = new byte[readSec];
-                        secBuffer.get(secondaryBytes);
-                        
+                        pcmBuffer.get(primaryBytes, 0, read);
+                        secBuffer.get(secondaryBytes, 0, readSec);
+
                         int minLen = Math.min(read, readSec);
                         for (int i = 0; i < minLen - 1; i += 2) {
                             short sample1 = (short) ((primaryBytes[i] & 0xFF) | (primaryBytes[i+1] << 8));
@@ -584,14 +691,13 @@ public class RecordingSession {
                             primaryBytes[i+1] = (byte) ((mixed >> 8) & 0xFF);
                         }
                         pcmBuffer.clear();
-                        pcmBuffer.put(primaryBytes);
+                        pcmBuffer.put(primaryBytes, 0, read);
                         pcmBuffer.position(0);
                     } else if (read <= 0 && readSec > 0) {
                         // Only secondary has data
+                        secBuffer.get(secondaryBytes, 0, readSec);
                         pcmBuffer.clear();
-                        byte[] secondaryBytes = new byte[readSec];
-                        secBuffer.get(secondaryBytes);
-                        pcmBuffer.put(secondaryBytes);
+                        pcmBuffer.put(secondaryBytes, 0, readSec);
                         pcmBuffer.position(0);
                         read = readSec;
                     }
@@ -646,7 +752,20 @@ public class RecordingSession {
     }
 
     public void stop() {
+        if (!released.compareAndSet(false, true)) return;
         isRecording.set(false);
+
+        if (projectionCallback != null) {
+            try { mediaProjection.unregisterCallback(projectionCallback); } catch (Exception ignored) {}
+            projectionCallback = null;
+        }
+
+        if (displayListener != null) {
+            DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+            try { if (dm != null) dm.unregisterDisplayListener(displayListener); } catch (Exception ignored) {}
+            displayListener = null;
+        }
+
         try {
             if (videoThread != null) videoThread.join(1000);
             if (audioThread != null) audioThread.join(1000);
@@ -656,8 +775,14 @@ public class RecordingSession {
             virtualDisplay.release();
             virtualDisplay = null;
         }
-        
+
+        if (renderer != null) {
+            renderer.release();
+            renderer = null;
+        }
+
         try { if (videoEncoder != null) { videoEncoder.stop(); videoEncoder.release(); } } catch (Exception ignored) {}
+        try { if (inputSurface != null) { inputSurface.release(); inputSurface = null; } } catch (Exception ignored) {}
         try { if (audioEncoder != null) { audioEncoder.stop(); audioEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioRecord != null) { audioRecord.stop(); audioRecord.release(); } } catch (Exception ignored) {}
         try { if (audioRecordSecondary != null) { audioRecordSecondary.stop(); audioRecordSecondary.release(); } } catch (Exception ignored) {}
@@ -669,6 +794,8 @@ public class RecordingSession {
         }
 
         try { if (pfd != null) { pfd.close(); pfd = null; } } catch (Exception ignored) {}
+
+        try { mediaProjection.stop(); } catch (Exception ignored) {}
 
         // Finalize MediaStore or notify Scanner
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -690,8 +817,8 @@ public class RecordingSession {
             return;
         }
 
-        // Drop resolution down a notch (e.g. from 4K to 2K, or 1080p to 720p)
-        settings.setResolution(currentRes + 1);
+        // Index 0 is Native, 1 is 4K — stepping 0->1 would raise it, so send Native straight to 1080p
+        settings.setResolution(currentRes == 0 ? 3 : currentRes + 1);
         new Handler(Looper.getMainLooper()).post(() -> {
             android.widget.Toast.makeText(context, "Hardware overloaded. Auto-downgrading...", android.widget.Toast.LENGTH_LONG).show();
         });
@@ -866,6 +993,49 @@ public class RecordingSession {
         } catch (Exception e) {
             Log.e(TAG, "Error saving screenshot", e);
         }
+    }
+
+    // A flip between the two landscapes keeps the same metrics, so rotation has to be compared too
+    public void onConfigurationChanged() {
+        if (!isRecording.get() || renderer == null || virtualDisplay == null) return;
+
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (wm == null) return;
+        wm.getDefaultDisplay().getRealMetrics(metrics);
+        int rotation = wm.getDefaultDisplay().getRotation();
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return;
+
+        boolean sizeChanged = metrics.widthPixels != sourceWidth || metrics.heightPixels != sourceHeight;
+        if (!sizeChanged && rotation == sourceRotation) return;
+
+        sourceWidth = metrics.widthPixels;
+        sourceHeight = metrics.heightPixels;
+        sourceRotation = rotation;
+        Log.i(TAG, "Display changed, mirroring at " + sourceWidth + "x" + sourceHeight + " rotation " + rotation);
+
+        if (sizeChanged) {
+            try {
+                virtualDisplay.resize(sourceWidth, sourceHeight,
+                        metrics.densityDpi > 0 ? metrics.densityDpi : 300);
+            } catch (Exception e) {
+                Log.e(TAG, "VirtualDisplay resize failed", e);
+            }
+        }
+        renderer.setSourceSize(sourceWidth, sourceHeight, rotation);
+    }
+
+    private void registerDisplayListener() {
+        DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+        if (dm == null) return;
+        displayListener = new DisplayManager.DisplayListener() {
+            @Override public void onDisplayAdded(int displayId) {}
+            @Override public void onDisplayRemoved(int displayId) {}
+            @Override public void onDisplayChanged(int displayId) {
+                if (displayId == android.view.Display.DEFAULT_DISPLAY) onConfigurationChanged();
+            }
+        };
+        dm.registerDisplayListener(displayListener, new Handler(Looper.getMainLooper()));
     }
 
     public long getActiveDurationMs() {

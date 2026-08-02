@@ -79,17 +79,24 @@ class CaptureRenderer {
     private final boolean allowRotation;
     private int displayRotation;
     private int settleFrames;
+    private final long minFrameIntervalNs;
+    private long lastPresentedNs;
+    private long nextPresentNs;
+    private int loggedWidth;
+    private int loggedHeight;
+    private int loggedRotation = -1;
     private volatile boolean released;
 
     CaptureRenderer(Surface encoderSurface, int outputWidth, int outputHeight,
                     int sourceWidth, int sourceHeight, boolean allowRotation,
-                    int displayRotation) throws RuntimeException {
+                    int displayRotation, int targetFps) throws RuntimeException {
         this.outputWidth = outputWidth;
         this.outputHeight = outputHeight;
         this.sourceWidth = sourceWidth;
         this.sourceHeight = sourceHeight;
         this.allowRotation = allowRotation;
         this.displayRotation = displayRotation;
+        this.minFrameIntervalNs = targetFps > 0 ? 1_000_000_000L / targetFps : 0L;
 
         thread = new HandlerThread("CaptureRenderer");
         thread.start();
@@ -283,6 +290,20 @@ class CaptureRenderer {
                 return;
             }
 
+            // The mirror runs at the panel's refresh rate, so drop frames to hit the chosen fps
+            long frameNs = surfaceTexture.getTimestamp();
+            if (minFrameIntervalNs > 0) {
+                if (nextPresentNs == 0) {
+                    nextPresentNs = frameNs;
+                } else if (frameNs + minFrameIntervalNs / 8 < nextPresentNs) {
+                    return;
+                }
+                nextPresentNs += minFrameIntervalNs;
+                if (nextPresentNs <= frameNs) nextPresentNs = frameNs + minFrameIntervalNs;
+            }
+            if (frameNs <= lastPresentedNs) frameNs = lastPresentedNs + 1;
+            lastPresentedNs = frameNs;
+
             surfaceTexture.getTransformMatrix(texMatrix);
             computeMvp();
 
@@ -308,7 +329,7 @@ class CaptureRenderer {
             GLES20.glDisableVertexAttribArray(aPositionLoc);
             GLES20.glDisableVertexAttribArray(aTextureCoordLoc);
 
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, surfaceTexture.getTimestamp());
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, frameNs);
             EGL14.eglSwapBuffers(eglDisplay, eglSurface);
         } catch (Exception e) {
             Log.e(TAG, "Frame draw failed", e);
@@ -327,6 +348,17 @@ class CaptureRenderer {
 
         float uprightArea = (sourceWidth * upright) * (sourceHeight * upright);
         float turnedArea = (sourceHeight * turned) * (sourceWidth * turned);
+
+        if (sourceWidth != loggedWidth || sourceHeight != loggedHeight || displayRotation != loggedRotation) {
+            loggedWidth = sourceWidth;
+            loggedHeight = sourceHeight;
+            loggedRotation = displayRotation;
+            Log.i(TAG, "Fit: source " + sourceWidth + "x" + sourceHeight
+                    + " -> output " + outputWidth + "x" + outputHeight
+                    + " rotation " + displayRotation + " allowRotation " + allowRotation
+                    + " upright " + upright + " turned " + turned
+                    + " turning " + (allowRotation && turnedArea > uprightArea));
+        }
 
         Matrix.setIdentityM(mvp, 0);
         if (allowRotation && turnedArea > uprightArea) {

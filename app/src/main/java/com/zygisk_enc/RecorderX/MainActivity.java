@@ -348,7 +348,7 @@ public class MainActivity extends AppCompatActivity {
             int selected = (int) value;
             if (selected == 0) {
                 android.content.SharedPreferences warnPrefs = getSharedPreferences("ui_prefs", MODE_PRIVATE);
-                boolean warned = warnPrefs.getBoolean("auto_orient_warned", false);
+                boolean warned = warnPrefs.getBoolean("auto_orient_warned_v2", false);
                 if (!warned && !isWarningDialogShowing) {
                     isWarningDialogShowing = true;
                     // Use plain Dialog — no AlertDialog internal handler conflicts, single clean tap guaranteed
@@ -400,7 +400,7 @@ public class MainActivity extends AppCompatActivity {
                     // Single clean listener — plain Dialog has no internal handler, one tap = one call
                     btnOk.setOnClickListener(v -> {
                         isWarningDialogShowing = false;
-                        warnPrefs.edit().putBoolean("auto_orient_warned", true).apply();
+                        warnPrefs.edit().putBoolean("auto_orient_warned_v2", true).apply();
                         settingsManager.setOrientation(0);
                         orientationSlider.setValue(0);
                         warningDialog.dismiss();

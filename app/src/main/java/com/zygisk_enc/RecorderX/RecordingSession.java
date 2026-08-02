@@ -226,7 +226,8 @@ public class RecordingSession {
             sourceHeight = Math.max(metrics.heightPixels, 1);
             sourceRotation = wm != null ? wm.getDefaultDisplay().getRotation() : Surface.ROTATION_0;
             renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
-                    sourceWidth, sourceHeight, settings.getOrientation() == 0, sourceRotation);
+                    sourceWidth, sourceHeight, settings.getOrientation() == 0, sourceRotation,
+                    settings.getFpsValue());
             registerDisplayListener();
 
             Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
@@ -758,6 +759,7 @@ public class RecordingSession {
         }
 
         try { if (videoEncoder != null) { videoEncoder.stop(); videoEncoder.release(); } } catch (Exception ignored) {}
+        try { if (inputSurface != null) { inputSurface.release(); inputSurface = null; } } catch (Exception ignored) {}
         try { if (audioEncoder != null) { audioEncoder.stop(); audioEncoder.release(); } } catch (Exception ignored) {}
         try { if (audioRecord != null) { audioRecord.stop(); audioRecord.release(); } } catch (Exception ignored) {}
         try { if (audioRecordSecondary != null) { audioRecordSecondary.stop(); audioRecordSecondary.release(); } } catch (Exception ignored) {}

@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class RecordingSession {
     private static final String TAG = "RecorderX_Session";
+    private static final int SOFTWARE_SHORT_EDGE = 1080;
+    private static final int SOFTWARE_FPS = 30;
     
     private final Context context;
     private final MediaProjection mediaProjection;
@@ -332,6 +334,14 @@ public class RecordingSession {
         throw new IOException("No hardware encoder for " + mime);
     }
 
+    // Fallback rungs have to keep the screen's shape too, or a rejection reintroduces the bars
+    private int[] scaleToShortEdge(int width, int height, int shortEdge) {
+        int shortSide = Math.min(width, height);
+        if (shortSide <= shortEdge) return new int[]{width & ~1, height & ~1};
+        float k = (float) shortEdge / shortSide;
+        return new int[]{((int) (width * k)) & ~1, ((int) (height * k)) & ~1};
+    }
+
     private int alignDown(int value, int alignment) {
         return alignment <= 1 ? value : (value / alignment) * alignment;
     }
@@ -364,6 +374,19 @@ public class RecordingSession {
         int originalWidth = settings.getResolutionWidth();
         int originalHeight = settings.getResolutionHeight();
         int originalFps = settings.getFpsValue();
+
+        // A CPU encoder cannot sustain full resolution, so cap it to something it can hold
+        boolean allowSoftware = settings.isSoftwareCodecAllowed();
+        if (allowSoftware) {
+            int shortSide = Math.min(originalWidth, originalHeight);
+            if (shortSide > SOFTWARE_SHORT_EDGE) {
+                float k = (float) SOFTWARE_SHORT_EDGE / shortSide;
+                originalWidth = ((int) (originalWidth * k)) & ~1;
+                originalHeight = ((int) (originalHeight * k)) & ~1;
+            }
+            originalFps = Math.min(originalFps, SOFTWARE_FPS);
+        }
+
         int originalBitrate = Math.max(settings.getBitrateValue(),
                 minimumBitrate(originalWidth, originalHeight, originalFps, originalMime));
         int originalBitrateMode = settings.getBitrateMode() == 0 ? 
@@ -381,42 +404,44 @@ public class RecordingSession {
             int mode = originalBitrateMode; // Always keep user's VBR/CBR preference
 
             // Step 1: Request with requested/safe settings
-            if (tryConfigureVideoEncoder(mime, originalWidth, originalHeight, originalFps, originalBitrate, mode, isOriginal, true)) {
+            boolean needHardware = !(allowSoftware && isOriginal);
+
+            if (tryConfigureVideoEncoder(mime, originalWidth, originalHeight, originalFps, originalBitrate, mode, isOriginal, needHardware)) {
                 return;
             }
 
             boolean isLandscape = originalWidth > originalHeight;
 
             // Dimensions for 1080p and 720p
-            int w1080 = isLandscape ? 1920 : 1080;
-            int h1080 = isLandscape ? 1080 : 1920;
-            int w720 = isLandscape ? 1280 : 720;
-            int h720 = isLandscape ? 720 : 1280;
+            int[] r1080 = scaleToShortEdge(originalWidth, originalHeight, 1080);
+            int[] r720 = scaleToShortEdge(originalWidth, originalHeight, 720);
+            int w1080 = r1080[0], h1080 = r1080[1];
+            int w720 = r720[0], h720 = r720[1];
 
             // Step 2: 1080p @ Max 60 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 60), 12000000, mode, false, true)) {
+            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 60), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 3: 720p @ Max 60 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 60), 12000000, mode, false, true)) {
+            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 60), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 4: 1080p @ Max 30 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 30), 12000000, mode, false, true)) {
+            if (tryConfigureVideoEncoder(mime, w1080, h1080, Math.min(originalFps, 30), 12000000, mode, false, needHardware)) {
                 return;
             }
 
             // Step 5: 720p @ Max 30 FPS (12 Mbps)
-            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 30), 12000000, mode, false, true)) {
+            if (tryConfigureVideoEncoder(mime, w720, h720, Math.min(originalFps, 30), 12000000, mode, false, needHardware)) {
                 return;
             }
         }
 
         // Rock Bottom (720p 30fps safe fallback with safeMime)
-        int safeWidth = originalWidth > originalHeight ? 1280 : 720;
-        int safeHeight = originalWidth > originalHeight ? 720 : 1280;
+        int[] safe = scaleToShortEdge(originalWidth, originalHeight, 720);
+        int safeWidth = safe[0], safeHeight = safe[1];
         // Last resort only: accept a software encoder rather than fail to record at all
         if (tryConfigureVideoEncoder(safeMime, safeWidth, safeHeight, 30, 4000000, originalBitrateMode, false, false)) {
             return;

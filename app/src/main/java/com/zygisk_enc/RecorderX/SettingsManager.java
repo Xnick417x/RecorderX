@@ -139,8 +139,11 @@ public class SettingsManager {
     public String getVideoMimeType() {
         switch (getCodec()) {
             case 1: return MediaFormat.MIMETYPE_VIDEO_HEVC;
-            case 2: return MediaFormat.MIMETYPE_VIDEO_AV1;
+            case 2:
+            case 3: return MediaFormat.MIMETYPE_VIDEO_AV1;
             default: return MediaFormat.MIMETYPE_VIDEO_AVC;
         }
     }
+
+    public boolean isSoftwareCodecAllowed() { return getCodec() == 3; }
 }

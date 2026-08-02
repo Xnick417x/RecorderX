@@ -10,8 +10,8 @@ android {
         applicationId "com.zygisk_enc.RecorderX.xnick"
         minSdk 29
         targetSdk 34
-        versionCode 8
-        versionName "3.0.3"
+        versionCode 9
+        versionName "3.0.4"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

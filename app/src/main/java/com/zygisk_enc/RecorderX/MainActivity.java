@@ -369,7 +369,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.setBackground(bg);
 
                     android.widget.TextView tvTitle = new android.widget.TextView(this);
-                    tvTitle.setText("⚠  Auto Orientation Warning");
+                    tvTitle.setText("Auto Orientation");
                     tvTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
                     tvTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
                     tvTitle.setTextColor(getActiveAccentColor());
@@ -380,7 +380,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.addView(tvTitle, titleParams);
 
                     android.widget.TextView tvMsg = new android.widget.TextView(this);
-                    tvMsg.setText("Auto Orientation is a gimmick and will degrade your recording quality.\n\nAndroid dynamically rotates the virtual display mid-recording, often causing resolution mismatches, black bars, and encoder instability.\n\nWe strongly recommend manually selecting Portrait or Landscape to match the primary orientation of the app you intend to record — this produces the best, most consistent output.");
+                    tvMsg.setText("Auto follows your phone as you turn it. The video keeps the shape it had when recording started, so when you rotate, the picture is turned a quarter turn to fill that frame instead of shrinking into a letterbox.\n\nThat means a landscape app still uses the whole frame at full detail, but it plays back on its side unless you turn your player to match.\n\nPortrait and Landscape keep the picture the right way up instead, fitting it into the frame you chose and adding bars when the screen does not match it.\n\nPick Auto if you rotate mid-recording and want every pixel used. Pick a fixed orientation if you want playback upright without turning anything.");
                     tvMsg.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13);
                     tvMsg.setTextColor(getResources().getColor(R.color.text_primary, getTheme()));
                     android.widget.LinearLayout.LayoutParams msgParams = new android.widget.LinearLayout.LayoutParams(
@@ -390,8 +390,7 @@ public class MainActivity extends AppCompatActivity {
                     layout.addView(tvMsg, msgParams);
 
                     android.widget.Button btnOk = new android.widget.Button(this);
-                    btnOk.setText("I Understand (5)");
-                    btnOk.setEnabled(false);
+                    btnOk.setText("I Understand");
                     android.graphics.drawable.GradientDrawable btnBg = new android.graphics.drawable.GradientDrawable();
                     btnBg.setColor(getActiveAccentColor());
                     btnBg.setCornerRadius(4 * getResources().getDisplayMetrics().density);
@@ -444,17 +443,6 @@ public class MainActivity extends AppCompatActivity {
                         warningDialog.getWindow().setAttributes(lp);
                     }
                     warningDialog.show();
-
-                    // Timer only updates text and re-enables — never touches click listener
-                    new android.os.CountDownTimer(5000, 1000) {
-                        @Override public void onTick(long ms) {
-                            btnOk.setText("I Understand (" + (ms / 1000 + 1) + ")");
-                        }
-                        @Override public void onFinish() {
-                            btnOk.setText("I Understand");
-                            btnOk.setEnabled(true);
-                        }
-                    }.start();
 
                     // Revert slider visually until user explicitly confirms
                     sl.setValue(settingsManager.getOrientation());

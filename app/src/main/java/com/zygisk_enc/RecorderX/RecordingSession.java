@@ -295,7 +295,7 @@ public class RecordingSession {
 
             return true;
         } catch (Exception e) {
-            Log.w(TAG, "Encoder fallback: Rejected " + width + "x" + height + "@" + fps + "fps (" + mime + ")");
+            Log.w(TAG, "Encoder fallback: Rejected " + width + "x" + height + "@" + fps + "fps (" + mime + "): " + e);
             if (videoEncoder != null) {
                 try { videoEncoder.release(); } catch (Exception ignored) {}
                 videoEncoder = null;
@@ -318,9 +318,6 @@ public class RecordingSession {
             }
             if (!supports) continue;
 
-            Log.i(TAG, "Encoder candidate for " + mime + ": " + info.getName()
-                    + " hardware=" + info.isHardwareAccelerated() + " softwareOnly=" + info.isSoftwareOnly());
-
             if (info.isHardwareAccelerated() && !info.isSoftwareOnly()) {
                 return MediaCodec.createByCodecName(info.getName());
             }
@@ -331,6 +328,7 @@ public class RecordingSession {
             Log.w(TAG, "Falling back to software encoder " + software + " for " + mime);
             return MediaCodec.createByCodecName(software);
         }
+
         throw new IOException("No hardware encoder for " + mime);
     }
 

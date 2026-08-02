@@ -83,9 +83,6 @@ class CaptureRenderer {
     private final long minFrameIntervalNs;
     private long lastPresentedNs;
     private long nextPresentNs;
-    private int loggedWidth;
-    private int loggedHeight;
-    private int loggedRotation = -1;
     private volatile boolean released;
 
     CaptureRenderer(Surface encoderSurface, int outputWidth, int outputHeight,
@@ -346,17 +343,6 @@ class CaptureRenderer {
 
         float uprightArea = (sourceWidth * upright) * (sourceHeight * upright);
         float turnedArea = (sourceHeight * turned) * (sourceWidth * turned);
-
-        if (sourceWidth != loggedWidth || sourceHeight != loggedHeight || displayRotation != loggedRotation) {
-            loggedWidth = sourceWidth;
-            loggedHeight = sourceHeight;
-            loggedRotation = displayRotation;
-            Log.i(TAG, "Fit: source " + sourceWidth + "x" + sourceHeight
-                    + " -> output " + outputWidth + "x" + outputHeight
-                    + " rotation " + displayRotation + " allowRotation " + allowRotation
-                    + " upright " + upright + " turned " + turned
-                    + " turning " + (allowRotation && turnedArea > uprightArea));
-        }
 
         Matrix.setIdentityM(mvp, 0);
         if (allowRotation && turnedArea > uprightArea) {

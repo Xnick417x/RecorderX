@@ -727,8 +727,11 @@ public class FloatingController {
         dismissTargetView = null;
     }
 
-    // Placement follows the live screen orientation, not the recording setting
+    // Placement follows the chosen recording orientation, not the live device rotation
     private boolean isDismissOnLeftEdge() {
+        int orientPref = settings.getOrientation();
+        if (orientPref == 1) return false;
+        if (orientPref == 2) return true;
         return context.getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
     }

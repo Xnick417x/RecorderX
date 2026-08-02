@@ -251,13 +251,7 @@ public class RecordingSession {
 
     private boolean tryConfigureVideoEncoder(String mime, int width, int height, int fps, int bitrate, int bitrateMode, boolean useHighProfile, boolean requireHardware) {
         try {
-            videoEncoder = MediaCodec.createEncoderByType(mime);
-
-            // Most devices have no hardware AV1 encoder, so this quietly returns libaom
-            if (requireHardware && !videoEncoder.getCodecInfo().isHardwareAccelerated()) {
-                Log.w(TAG, "Rejecting software encoder " + videoEncoder.getCodecInfo().getName() + " for " + mime);
-                throw new IllegalStateException("no hardware encoder for " + mime);
-            }
+            videoEncoder = pickEncoder(mime, requireHardware);
 
             MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(mime);
             MediaCodecInfo.VideoCapabilities videoCaps = caps != null ? caps.getVideoCapabilities() : null;
@@ -307,6 +301,36 @@ public class RecordingSession {
             }
             return false;
         }
+    }
+
+    // createEncoderByType takes the first match, not the best, so walk the list and prefer hardware
+    private MediaCodec pickEncoder(String mime, boolean requireHardware) throws IOException {
+        android.media.MediaCodecList list = new android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS);
+        String software = null;
+
+        for (MediaCodecInfo info : list.getCodecInfos()) {
+            if (!info.isEncoder() || info.isAlias()) continue;
+
+            boolean supports = false;
+            for (String type : info.getSupportedTypes()) {
+                if (type.equalsIgnoreCase(mime)) { supports = true; break; }
+            }
+            if (!supports) continue;
+
+            Log.i(TAG, "Encoder candidate for " + mime + ": " + info.getName()
+                    + " hardware=" + info.isHardwareAccelerated() + " softwareOnly=" + info.isSoftwareOnly());
+
+            if (info.isHardwareAccelerated() && !info.isSoftwareOnly()) {
+                return MediaCodec.createByCodecName(info.getName());
+            }
+            if (software == null) software = info.getName();
+        }
+
+        if (!requireHardware && software != null) {
+            Log.w(TAG, "Falling back to software encoder " + software + " for " + mime);
+            return MediaCodec.createByCodecName(software);
+        }
+        throw new IOException("No hardware encoder for " + mime);
     }
 
     private int alignDown(int value, int alignment) {

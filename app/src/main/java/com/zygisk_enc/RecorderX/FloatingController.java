@@ -36,6 +36,7 @@ public class FloatingController {
     private ImageView btnRecordStop;
     private ImageView btnScreenshot;
     private ImageView btnLayout;
+    private ImageView btnGear;
     private BrushController brushController;
     private boolean isExpanded = false;
     private boolean isShowing = false;
@@ -145,6 +146,7 @@ public class FloatingController {
             icon.setLayoutParams(iconParams);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
             icon.setImageResource(R.mipmap.ic_launcher);
+            icon.setAlpha(0.8f);
             bubbleView.addView(icon);
             
             // 2. Menu View (Controls)
@@ -272,7 +274,7 @@ public class FloatingController {
                 windowManager.updateViewLayout(rootLayout, params);
             });
 
-            ImageView btnGear = createMenuButton(new GearIconDrawable(), v -> {
+            btnGear = createMenuButton(new GearIconDrawable(), v -> {
                 collapse();
                 service.openMainApp();
             });
@@ -414,7 +416,11 @@ public class FloatingController {
     // Button, glyph and the across-axis margin never change, so the strip is the same thickness in
     // both layouts. Only the gap along the axis flexes, between 1dp and the original 4dp.
     private void applyButtonSizing(boolean vertical) {
-        int count = Math.max(menuButtons.size(), 1);
+        int count = 0;
+        for (ImageView button : menuButtons) {
+            if (button.getVisibility() != View.GONE) count++;
+        }
+        count = Math.max(count, 1);
         Point screen = getScreenSize();
         int available = (vertical ? screen.y : screen.x) - dpToPx(8);
         int reserved = vertical ? dpToPx(20) : dpToPx(50); // timer, worst case 00:00:00
@@ -446,8 +452,9 @@ public class FloatingController {
     private void expand() {
         if (isExpanded) return;
 
-        applyMenuOrientation();
+        // Visibility first: the sizing divides the strip between the buttons that are actually shown
         applyRecordingVisibility();
+        applyMenuOrientation();
 
         // Measure instead of assuming: the menu changes size with orientation and with what is visible
         int unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
@@ -650,7 +657,12 @@ public class FloatingController {
             btnPause.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
             btnPause.setImageDrawable(new PauseIconDrawable(service.isPaused()));
         }
-        if (btnScreenshot != null) btnScreenshot.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
+        // Screenshot stays available when idle; on 14+ it goes through the accessibility service
+        // and needs no capture session at all
+        if (btnScreenshot != null) btnScreenshot.setVisibility(View.VISIBLE);
+        if (btnGear != null) {
+            btnGear.setVisibility(settings.isBubbleGearEnabled() ? View.VISIBLE : View.GONE);
+        }
         if (tvTimer != null) tvTimer.setVisibility(isRecordingActive ? View.VISIBLE : View.GONE);
         if (btnMic != null) {
             boolean showMic = isRecordingActive && service.isAudioSourceSystem();

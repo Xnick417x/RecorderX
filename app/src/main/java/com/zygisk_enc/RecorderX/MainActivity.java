@@ -507,6 +507,11 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        switchGear.setChecked(settingsManager.isBubbleGearEnabled());
+        switchGear.setOnCheckedChangeListener((buttonView, isChecked) ->
+                settingsManager.setBubbleGearEnabled(isChecked));
+
         // Output Settings
         TextInputEditText namingInput = findViewById(R.id.namingTemplateEditText);
         namingInput.setText(settingsManager.getRawNamingTemplate());
@@ -735,6 +740,10 @@ public class MainActivity extends AppCompatActivity {
         com.google.android.material.switchmaterial.SwitchMaterial switchFloating = findViewById(R.id.switchFloatingControl);
         if (switchFloating != null) {
             switchFloating.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
+        }
+        com.google.android.material.switchmaterial.SwitchMaterial switchGear = findViewById(R.id.switchBubbleGear);
+        if (switchGear != null) {
+            switchGear.setTrackTintList(android.content.res.ColorStateList.valueOf(color));
         }
         
         // 6. TextInputLayout

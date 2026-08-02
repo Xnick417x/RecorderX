@@ -352,6 +352,11 @@ public class RecorderService extends Service {
             if (recordingSession != null) {
                 recordingSession.takeScreenshot(onCompleted);
             } else {
+                // Below 14 the shot is taken off the capture session, so there has to be one
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        android.widget.Toast.makeText(this,
+                                "Screenshots need a recording on this Android version",
+                                android.widget.Toast.LENGTH_SHORT).show());
                 if (onCompleted != null) onCompleted.run();
             }
         }

@@ -77,15 +77,19 @@ class CaptureRenderer {
     private int sourceWidth;
     private int sourceHeight;
     private final boolean allowRotation;
+    private int displayRotation;
+    private int settleFrames;
     private volatile boolean released;
 
     CaptureRenderer(Surface encoderSurface, int outputWidth, int outputHeight,
-                    int sourceWidth, int sourceHeight, boolean allowRotation) throws RuntimeException {
+                    int sourceWidth, int sourceHeight, boolean allowRotation,
+                    int displayRotation) throws RuntimeException {
         this.outputWidth = outputWidth;
         this.outputHeight = outputHeight;
         this.sourceWidth = sourceWidth;
         this.sourceHeight = sourceHeight;
         this.allowRotation = allowRotation;
+        this.displayRotation = displayRotation;
 
         thread = new HandlerThread("CaptureRenderer");
         thread.start();
@@ -124,14 +128,16 @@ class CaptureRenderer {
     }
 
     // The display changed shape, so re-fit. Called from the service's configuration callback.
-    void setSourceSize(int width, int height) {
+    void setSourceSize(int width, int height, int rotation) {
         if (released || width <= 0 || height <= 0) return;
         handler.post(() -> {
             if (released || surfaceTexture == null) return;
             sourceWidth = width;
             sourceHeight = height;
+            displayRotation = rotation;
+            settleFrames = 3;
             surfaceTexture.setDefaultBufferSize(width, height);
-            Log.i(TAG, "Source size now " + width + "x" + height);
+            Log.i(TAG, "Source size now " + width + "x" + height + " rotation " + rotation);
         });
     }
 
@@ -270,6 +276,13 @@ class CaptureRenderer {
         if (released || surfaceTexture == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
         try {
             surfaceTexture.updateTexImage();
+
+            // Drain but do not present while the geometry swaps, so the encoder repeats the last
+            if (settleFrames > 0) {
+                settleFrames--;
+                return;
+            }
+
             surfaceTexture.getTransformMatrix(texMatrix);
             computeMvp();
 
@@ -302,6 +315,11 @@ class CaptureRenderer {
         }
     }
 
+    // Turn to match how the phone was physically rotated, so both directions come out upright
+    private float turnDegrees() {
+        return displayRotation == Surface.ROTATION_270 ? 90f : -90f;
+    }
+
     // Only Auto turns the picture; a locked orientation stays upright and is simply fitted
     private void computeMvp() {
         float upright = Math.min((float) outputWidth / sourceWidth, (float) outputHeight / sourceHeight);
@@ -312,7 +330,7 @@ class CaptureRenderer {
 
         Matrix.setIdentityM(mvp, 0);
         if (allowRotation && turnedArea > uprightArea) {
-            Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f);
+            Matrix.rotateM(mvp, 0, turnDegrees(), 0f, 0f, 1f);
             Matrix.scaleM(mvp, 0,
                     sourceWidth * turned / outputHeight,
                     sourceHeight * turned / outputWidth, 1f);

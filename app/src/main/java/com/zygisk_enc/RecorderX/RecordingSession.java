@@ -83,6 +83,8 @@ public class RecordingSession {
     private CaptureRenderer renderer;
     private int sourceWidth;
     private int sourceHeight;
+    private int sourceRotation = -1;
+    private DisplayManager.DisplayListener displayListener;
     private MediaProjection.Callback projectionCallback;
     
     private volatile int videoFrameCount = 0;
@@ -222,8 +224,10 @@ public class RecordingSession {
             // Mirror at the display's own size and let the renderer do the fitting
             sourceWidth = Math.max(metrics.widthPixels, 1);
             sourceHeight = Math.max(metrics.heightPixels, 1);
+            sourceRotation = wm != null ? wm.getDefaultDisplay().getRotation() : Surface.ROTATION_0;
             renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
-                    sourceWidth, sourceHeight, settings.getOrientation() == 0);
+                    sourceWidth, sourceHeight, settings.getOrientation() == 0, sourceRotation);
+            registerDisplayListener();
 
             Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
                     + " -> " + activeWidth + "x" + activeHeight + ")...");
@@ -708,6 +712,12 @@ public class RecordingSession {
             projectionCallback = null;
         }
 
+        if (displayListener != null) {
+            DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+            try { if (dm != null) dm.unregisterDisplayListener(displayListener); } catch (Exception ignored) {}
+            displayListener = null;
+        }
+
         try {
             if (videoThread != null) videoThread.join(1000);
             if (audioThread != null) audioThread.join(1000);
@@ -936,27 +946,47 @@ public class RecordingSession {
         }
     }
 
-    // Follow the display through a rotation: resize the mirror, then let the renderer re-fit it
+    // A flip between the two landscapes keeps the same metrics, so rotation has to be compared too
     public void onConfigurationChanged() {
         if (!isRecording.get() || renderer == null || virtualDisplay == null) return;
 
         DisplayMetrics metrics = new DisplayMetrics();
         WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        if (wm != null) wm.getDefaultDisplay().getRealMetrics(metrics);
+        if (wm == null) return;
+        wm.getDefaultDisplay().getRealMetrics(metrics);
+        int rotation = wm.getDefaultDisplay().getRotation();
         if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return;
-        if (metrics.widthPixels == sourceWidth && metrics.heightPixels == sourceHeight) return;
+
+        boolean sizeChanged = metrics.widthPixels != sourceWidth || metrics.heightPixels != sourceHeight;
+        if (!sizeChanged && rotation == sourceRotation) return;
 
         sourceWidth = metrics.widthPixels;
         sourceHeight = metrics.heightPixels;
-        Log.i(TAG, "Display rotated, mirroring at " + sourceWidth + "x" + sourceHeight);
+        sourceRotation = rotation;
+        Log.i(TAG, "Display changed, mirroring at " + sourceWidth + "x" + sourceHeight + " rotation " + rotation);
 
-        try {
-            virtualDisplay.resize(sourceWidth, sourceHeight,
-                    metrics.densityDpi > 0 ? metrics.densityDpi : 300);
-        } catch (Exception e) {
-            Log.e(TAG, "VirtualDisplay resize failed", e);
+        if (sizeChanged) {
+            try {
+                virtualDisplay.resize(sourceWidth, sourceHeight,
+                        metrics.densityDpi > 0 ? metrics.densityDpi : 300);
+            } catch (Exception e) {
+                Log.e(TAG, "VirtualDisplay resize failed", e);
+            }
         }
-        renderer.setSourceSize(sourceWidth, sourceHeight);
+        renderer.setSourceSize(sourceWidth, sourceHeight, rotation);
+    }
+
+    private void registerDisplayListener() {
+        DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+        if (dm == null) return;
+        displayListener = new DisplayManager.DisplayListener() {
+            @Override public void onDisplayAdded(int displayId) {}
+            @Override public void onDisplayRemoved(int displayId) {}
+            @Override public void onDisplayChanged(int displayId) {
+                if (displayId == android.view.Display.DEFAULT_DISPLAY) onConfigurationChanged();
+            }
+        };
+        dm.registerDisplayListener(displayListener, new Handler(Looper.getMainLooper()));
     }
 
     public long getActiveDurationMs() {

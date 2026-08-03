@@ -340,7 +340,7 @@ public class RecorderService extends Service {
                 if (onCompleted != null) onCompleted.run();
             } else {
                 new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                    android.widget.Toast.makeText(this, "Please enable Accessibility permission for RecorderX to take screenshots", android.widget.Toast.LENGTH_LONG).show();
+                    android.widget.Toast.makeText(this, "Please enable Accessibility permission for RecorderX to take screenshots", android.widget.Toast.LENGTH_SHORT).show();
                     try {
                         Intent intent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

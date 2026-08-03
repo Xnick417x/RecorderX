@@ -94,8 +94,9 @@ public class SettingsManager {
         DisplayMetrics dm = getMetrics();
         int screenShort = Math.min(dm.widthPixels, dm.heightPixels);
         switch (getResolution()) {
-            case 1: return Math.min(2160, screenShort);
-            case 2: return Math.min(1440, screenShort);
+            // 4K and 2K are honoured above the panel, so the file lands in the tier its name claims
+            case 1: return 2160;
+            case 2: return 1440;
             case 3: return Math.min(1080, screenShort);
             case 4: return Math.min(720, screenShort);
             case 5: return Math.min(480, screenShort);

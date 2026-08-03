@@ -232,7 +232,7 @@ public class FloatingController {
                     // Accessibility service not enabled — guide user to enable it
                     android.widget.Toast.makeText(context,
                             "Please enable Accessibility permission for RecorderX to control mic",
-                            android.widget.Toast.LENGTH_LONG).show();
+                            android.widget.Toast.LENGTH_SHORT).show();
                     try {
                         android.content.Intent intent = new android.content.Intent(
                                 android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);

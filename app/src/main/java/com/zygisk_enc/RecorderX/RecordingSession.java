@@ -82,6 +82,8 @@ public class RecordingSession {
     private int activeWidth;
     private int activeHeight;
     private String activeMime;
+    private int activeFps;
+    private int requestedFps;
     private CaptureRenderer renderer;
     private int sourceWidth;
     private int sourceHeight;
@@ -108,6 +110,7 @@ public class RecordingSession {
     public void pause() {
         if (isRecording.get() && !isPaused.get()) {
             isPaused.set(true);
+            if (renderer != null) renderer.setPaused(true);
             pauseStartTimeUs = System.nanoTime() / 1000;
             pauseStartTimeMs = System.currentTimeMillis();
             if (videoEncoder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -131,6 +134,7 @@ public class RecordingSession {
                 pauseStartTimeMs = -1;
             }
             isPaused.set(false);
+            if (renderer != null) renderer.setPaused(false);
             if (videoEncoder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 android.os.Bundle params = new android.os.Bundle();
                 params.putInt(MediaCodec.PARAMETER_KEY_SUSPEND, 0);
@@ -181,6 +185,7 @@ public class RecordingSession {
 
             setupVideoEncoder();
             warnIfCodecChanged(settings.getVideoMimeType());
+            warnIfFpsChanged();
 
             if (settings.getAudioSource() != 0) {
                 try {
@@ -227,9 +232,10 @@ public class RecordingSession {
             sourceWidth = Math.max(metrics.widthPixels, 1);
             sourceHeight = Math.max(metrics.heightPixels, 1);
             sourceRotation = wm != null ? wm.getDefaultDisplay().getRotation() : Surface.ROTATION_0;
+            // Pace to what the encoder took, not what was asked for, or it is fed frames it cannot hold
             renderer = new CaptureRenderer(inputSurface, activeWidth, activeHeight,
                     sourceWidth, sourceHeight, settings.getOrientation() == 0, sourceRotation,
-                    settings.getFpsValue());
+                    activeFps);
             registerDisplayListener();
 
             Log.d(TAG, "Creating VirtualDisplay (" + sourceWidth + "x" + sourceHeight
@@ -262,6 +268,11 @@ public class RecordingSession {
                 // Assuming 16 forced a rescale of the native size that aliased into scanlines
                 width = alignDown(width, videoCaps.getWidthAlignment());
                 height = alignDown(height, videoCaps.getHeightAlignment());
+
+                int[] fitted = fitToEncoder(videoCaps, width, height);
+                width = fitted[0];
+                height = fitted[1];
+
                 Log.i(TAG, "Encoder " + videoEncoder.getCodecInfo().getName()
                         + " alignment " + videoCaps.getWidthAlignment() + "x" + videoCaps.getHeightAlignment()
                         + " -> capture size " + width + "x" + height);
@@ -281,7 +292,6 @@ public class RecordingSession {
                 format.setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, (float) fps);
             }
             format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-            format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1000000L / fps);
             format.setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode);
 
             if (useHighProfile && MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime)) {
@@ -294,6 +304,7 @@ public class RecordingSession {
             this.activeWidth = width;
             this.activeHeight = height;
             this.activeMime = mime;
+            this.activeFps = fps;
 
             return true;
         } catch (Exception e) {
@@ -346,6 +357,23 @@ public class RecordingSession {
         return alignment <= 1 ? value : (value / alignment) * alignment;
     }
 
+    // A tall screen at 4K overruns what the encoder takes, so shrink into its range rather than drop a rung
+    private int[] fitToEncoder(MediaCodecInfo.VideoCapabilities caps, int width, int height) {
+        if (caps.isSizeSupported(width, height)) return new int[]{width, height};
+
+        float k = Math.min((float) caps.getSupportedWidths().getUpper() / width,
+                (float) caps.getSupportedHeights().getUpper() / height);
+        if (k >= 1f) return new int[]{width, height};
+
+        int fittedWidth = alignDown((int) (width * k), Math.max(2, caps.getWidthAlignment()));
+        int fittedHeight = alignDown((int) (height * k), Math.max(2, caps.getHeightAlignment()));
+        if (!caps.isSizeSupported(fittedWidth, fittedHeight)) return new int[]{width, height};
+
+        Log.i(TAG, "Encoder tops out below " + width + "x" + height
+                + ", fitting to " + fittedWidth + "x" + fittedHeight);
+        return new int[]{fittedWidth, fittedHeight};
+    }
+
     private String codecLabel(String mime) {
         if (MediaFormat.MIMETYPE_VIDEO_HEVC.equals(mime)) return "H.265";
         if (MediaFormat.MIMETYPE_VIDEO_AV1.equals(mime)) return "AV1";
@@ -359,7 +387,16 @@ public class RecordingSession {
                 + codecLabel(activeMime);
         Log.w(TAG, message);
         new Handler(Looper.getMainLooper()).post(() ->
-                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show());
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show());
+    }
+
+    // Same reason: a rate the encoder would not take should be reported, not discovered in the file
+    private void warnIfFpsChanged() {
+        if (activeFps <= 0 || activeFps >= requestedFps) return;
+        final String message = "Capped to " + activeFps + "fps at " + activeWidth + "x" + activeHeight;
+        Log.w(TAG, message);
+        new Handler(Looper.getMainLooper()).post(() ->
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show());
     }
 
     // A flat bitrate starves high-resolution captures, so scale a floor from pixels per second
@@ -386,6 +423,8 @@ public class RecordingSession {
             }
             originalFps = Math.min(originalFps, SOFTWARE_FPS);
         }
+
+        requestedFps = originalFps;
 
         int originalBitrate = Math.max(settings.getBitrateValue(),
                 minimumBitrate(originalWidth, originalHeight, originalFps, originalMime));
@@ -566,6 +605,7 @@ public class RecordingSession {
     }
 
     private long videoStartTimeUs = -1;
+
 
     private void drainEncoder(MediaCodec encoder, boolean isVideo) {
         MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
@@ -820,7 +860,7 @@ public class RecordingSession {
         // Index 0 is Native, 1 is 4K — stepping 0->1 would raise it, so send Native straight to 1080p
         settings.setResolution(currentRes == 0 ? 3 : currentRes + 1);
         new Handler(Looper.getMainLooper()).post(() -> {
-            android.widget.Toast.makeText(context, "Hardware overloaded. Auto-downgrading...", android.widget.Toast.LENGTH_LONG).show();
+            android.widget.Toast.makeText(context, "Hardware overloaded. Auto-downgrading...", android.widget.Toast.LENGTH_SHORT).show();
         });
 
         new Thread(() -> {

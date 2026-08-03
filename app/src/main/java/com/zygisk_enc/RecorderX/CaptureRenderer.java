@@ -23,6 +23,7 @@ class CaptureRenderer {
     private static final String TAG = "RecorderX_Renderer";
     private static final int EGL_RECORDABLE_ANDROID = 0x3142;
     private static final long GEOMETRY_SETTLE_NS = 200_000_000L;
+    private static final long HEARTBEAT_MS = 250;
 
     private static final String VERTEX_SHADER =
         "uniform mat4 uMvp;\n" +
@@ -84,6 +85,8 @@ class CaptureRenderer {
     private long lastPresentedNs;
     private long nextPresentNs;
     private volatile boolean released;
+    private volatile boolean paused;
+    private final Runnable heartbeat = this::drawHeartbeat;
 
     CaptureRenderer(Surface encoderSurface, int outputWidth, int outputHeight,
                     int sourceWidth, int sourceHeight, boolean allowRotation,
@@ -149,6 +152,7 @@ class CaptureRenderer {
     void release() {
         if (released) return;
         released = true;
+        handler.removeCallbacks(heartbeat);
         handler.post(() -> {
             if (program != 0) {
                 GLES20.glDeleteProgram(program);
@@ -297,9 +301,37 @@ class CaptureRenderer {
                 if (nextPresentNs <= frameNs) nextPresentNs = frameNs + minFrameIntervalNs;
             }
             if (frameNs <= lastPresentedNs) frameNs = lastPresentedNs + 1;
-            lastPresentedNs = frameNs;
 
             surfaceTexture.getTransformMatrix(texMatrix);
+            renderAt(frameNs);
+        } catch (Exception e) {
+            Log.e(TAG, "Frame draw failed", e);
+        }
+    }
+
+    // A still screen produces no frames at all, so keep the timeline fed while nothing moves
+    private void drawHeartbeat() {
+        if (released || paused || surfaceTexture == null || eglDisplay == EGL14.EGL_NO_DISPLAY) return;
+        if (lastPresentedNs == 0) return;
+        if (System.nanoTime() < holdUntilNs) {
+            armHeartbeat();
+            return;
+        }
+        try {
+            renderAt(Math.max(System.nanoTime(), lastPresentedNs + 1));
+        } catch (Exception e) {
+            Log.e(TAG, "Heartbeat draw failed", e);
+        }
+    }
+
+    private void armHeartbeat() {
+        handler.removeCallbacks(heartbeat);
+        handler.postDelayed(heartbeat, HEARTBEAT_MS);
+    }
+
+    private void renderAt(long frameNs) {
+        try {
+            lastPresentedNs = frameNs;
             computeMvp();
 
             GLES20.glViewport(0, 0, outputWidth, outputHeight);
@@ -326,9 +358,16 @@ class CaptureRenderer {
 
             EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, frameNs);
             EGL14.eglSwapBuffers(eglDisplay, eglSurface);
+            armHeartbeat();
         } catch (Exception e) {
-            Log.e(TAG, "Frame draw failed", e);
+            Log.e(TAG, "Render failed", e);
         }
+    }
+
+    void setPaused(boolean paused) {
+        this.paused = paused;
+        if (paused) handler.removeCallbacks(heartbeat);
+        else armHeartbeat();
     }
 
     // Turn to match how the phone was physically rotated, so both directions come out upright
